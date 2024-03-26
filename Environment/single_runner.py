@@ -1,23 +1,28 @@
 '''
-Perform a single run of the flow with the latest policy to evaluate the results
+Perform a single run of the flow with trained controller (RL policy)
 '''
+
 import os
 import socket
 import numpy as np
 import csv
+import sys
+import math
+import argparse
+import json
 
-from tensorforce.agents import Agent
-from tensorforce.execution import Runner
+from dolfin import Expression
+from gym.wrappers.time_limit import TimeLimit
 
+from Env2DCylinderModified import Env2DCylinderModified
+from probe_positions import probe_positions
 from simulation_base.env import resume_env, nb_actuations, simulation_duration
 
-example_environment = resume_env(plot=False, single_run=True, dump_debug=1)
-
-deterministic = True
-
-saver_restore = os.getcwd() + "/saver_data/"
-
-agent = Agent.load(directory = saver_restore)
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize, VecFrameStack
+from stable_baselines3.common.monitor import Monitor
+from sb3_contrib import TQC
+from stable_baselines3 import SAC
+from stable_baselines3.common.evaluation import evaluate_policy
 
 # If previous evaluation results exist, delete them
 if(os.path.exists("saved_models/test_strategy.csv")):
@@ -26,47 +31,31 @@ if(os.path.exists("saved_models/test_strategy.csv")):
 if(os.path.exists("saved_models/test_strategy_avg.csv")):
     os.remove("saved_models/test_strategy_avg.csv")
 
-def one_run():
-    print("Start simulation")
-    state = example_environment.reset()
-    example_environment.render = True
 
-    action_step_size = simulation_duration / nb_actuations  # Duration of 1 train episode / actions in 1 episode
-    single_run_duration = 200  # In non-dimensional time
-    action_steps = int(single_run_duration / action_step_size)
+if __name__ == '__main__':
 
-    internals = agent.initial_internals()
+    ## Things to modify before single run (evaluate the policy)
+    saver_restore ='Your path to the saved agent, including the file name.'
+    vecnorm_path = 'Your path to the saved normalization file, including the file name.'
+   
+    action_step_size = simulation_duration / nb_actuations  # Get action step size from the environment, not used
+    horizon = 400 # Number of actions for single run. Non-dimensional time is horizon*action_step_size (by default action_step_size=0.5)
+    action_steps = int(horizon)
+    
+    agent = TQC.load(saver_restore)
+    env = SubprocVecEnv([resume_env(plot=False, single_run=True, horizon=horizon, dump_vtu=100, n_env=99)], start_method='spawn')
+    
+    # Deactivate this if not use history observations
+    env = VecFrameStack(env, n_stack=27)
+    
+    env = VecNormalize.load(venv=env, load_path=vecnorm_path)
 
+    observations = env.reset()
+    
+    episode_reward = 0.0
+    
     for k in range(action_steps):
-        action, internals = agent.act(state, deterministic=deterministic, independent=True, internals=internals)
-        state, terminal, reward = example_environment.execute(action)
-
-    data = np.genfromtxt("saved_models/test_strategy.csv", delimiter=";")
-    data = data[1:,1:]
-    m_data = np.average(data[len(data)//2:], axis=0)  # Calculate means for the second half of the single episode
-    nb_jets = len(m_data)-4
-    # Print statistics
-    print("Single Run finished. AvgDrag : {}, AvgRecircArea : {}".format(m_data[1], m_data[2]))
-
-    # Output average values for the single run (Note that values for each timestep are already reported as we execute)
-    name = "test_strategy_avg.csv"
-    if(not os.path.exists("saved_models")):
-        os.mkdir("saved_models")
-    if(not os.path.exists("saved_models/"+name)):
-        with open("saved_models/"+name, "w") as csv_file:
-            spam_writer=csv.writer(csv_file, delimiter=";", lineterminator="\n")
-            spam_writer.writerow(["Name", "Drag", "Lift", "RecircArea"] + ["Jet" + str(v) for v in range(nb_jets)])
-            spam_writer.writerow([example_environment.simu_name] + m_data[1:].tolist())
-    else:
-        with open("saved_models/"+name, "a") as csv_file:
-            spam_writer=csv.writer(csv_file, delimiter=";", lineterminator="\n")
-            spam_writer.writerow([example_environment.simu_name] + m_data[1:].tolist())
-
-
-
-if not deterministic:
-    for _ in range(10):
-        one_run()
-
-else:
-    one_run()
+        action, _ = agent.predict(observations, deterministic=True)
+        observations, rw, done, _ = env.step(action)
+        episode_reward += rw
+        print("Reward:", episode_reward)

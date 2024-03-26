@@ -89,8 +89,9 @@ D = np.zeros((C.shape[0], B.shape[1]))
 
 cano_qp = False;
 
-sys = System(scipysig.StateSpace(A, B, C, D, dt=1))
-# sys = GymSystem()
+# sys = System(scipysig.StateSpace(A, B, C, D, dt=1))
+sys = GymSystem()
+
 
 fig, ax = plt.subplots(1,2)
 plt.margins(x=0, y=0)
@@ -116,7 +117,6 @@ for T in T_list:
     #np.random.seed(10)
     
     data = sys.apply_input(u = np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. ), noise_std=0) #np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. )
-
     #data = sys.apply_input(u = np.random.uniform(-3,3,T).reshape((T, 1)), noise_std=0)
     deepc = DeePC(data, Tini = T_INI, horizon = HORIZON)
     

@@ -304,12 +304,12 @@ class DeePC(object):
         
         Q = np.zeros([self.M * self.horizon,self.M * self.horizon]) #0.001*np.eye(self.M * self.horizon)
         R = np.eye(self.P * self.horizon)
-        G = lambda_g * np.eye(self.num_g)
+        G_g = lambda_g * np.eye(self.num_g)
         Su = lambda_u * np.eye(self.M * self.Tini)
         Sy = lambda_y * np.eye(self.P * self.Tini)
         
         # Formulate loss function
-        P = block_diag(G,Su,Sy,Q,R)
+        P = block_diag(G_g,Su,Sy,Q,R)
         eig_P = np.linalg.eigvals(P)
         assert np.all(eig_P) >= 0,  "Quadratic matrix needs to be positive semidefinite."            
         q = np.hstack([np.zeros(self.x_dim - self.P * self.horizon), -np.dot(yref*np.ones(self.P * self.horizon),R)])

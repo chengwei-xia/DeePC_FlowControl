@@ -3,35 +3,21 @@
 Environment seen by the RL agent. It is the main class of the repo.
 """
 
-#from printind.printind_decorators import printi_all_method_calls as printidc
-#from printind.printind_function import printi, printiv
-#from tensorforce.environments import Environment
-#import tensorforce
-#from tqdm import tqdm
-#from threading import Thread
-#from tensorforce import TensorforceError
-
-import numpy as np
-import matplotlib.pyplot as plt
-
-# a bit hacky, but meeehh...
-# 8FIXME!!
 import sys
 import os
 cwd = os.getcwd()
 sys.path.append(cwd + "/../Simulation/")
-sys.path.append('/home/issay/UROP/DPC_Flow/Evironment/mesh')
 
-from dolfin import Expression, File, plot
-from dolfin import *
+from dolfinx import Expression, File, plot
 from probes import PenetratedDragProbeANN, PenetratedLiftProbeANN, PressureProbeANN, VelocityProbeANN, RecirculationAreaProbe
 from generate_msh import generate_mesh
 from flow_solver import FlowSolver
 from msh_convert import convert
-
-from collections import deque
-
-import pickle
+from dolfinx import *
+from distutils.dir_util import copy_tree
+import numpy as np
+from collections import deques
+import matplotlib.pyplot as plt
 
 import time
 import math
@@ -39,19 +25,16 @@ import csv
 
 import shutil
 from scipy import signal
-#import peakutils
+import peakutils
 filter_drag=0
 
-# TODO: check that right types etc from tensorfoce examples
-# typically:
+import gym
+import copy
+import subprocess
+import scipy.signal as sgn
+import io
+import pickle5 as pickle
 
-# from tensorforce.contrib.openai_gym import OpenAIGym
-# environment = OpenAIGym('MountainCarContinuous-v0', visualize=False)
-
-# printiv(environment.states)
-# environment.states = {'shape': (2,), 'type': 'float'}
-# printiv(environment.actions)
-# environment.actions = {'max_value': 1.0, 'shape': (1,), 'min_value': -1.0, 'type': 'float'}
 
 class RingBuffer():
     "A 1D ring buffer using numpy arrays"
@@ -72,11 +55,11 @@ class RingBuffer():
 
 
 # @printidc()
-class Env2DCylinder(): #class Env2DCylinder(Environment):
+class Env2DCylinderModified(gym.Env):
     """Environment for 2D flow simulation around a cylinder."""
 
     def __init__(self, path_root, geometry_params, flow_params, solver_params, output_params,
-                 optimization_params, inspection_params, n_iter_make_ready=None, verbose=0, size_history=200,
+                 optimization_params, inspection_params, n_iter_make_ready=None, verbose=0, size_history=2000,
                  reward_function='plain_drag', size_time_state=50, number_steps_execution=1, simu_name="Simu"):
         """
 
@@ -104,10 +87,11 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
         self.number_steps_execution = number_steps_execution
 
         self.simu_name = simu_name
-        self.history_length = len(self.output_params["locations"]) # Initialize the parameter for number of states with force measurements
+        self.env_number = inspection_params['index']
+
 
         # If previous output.csv (epidosde avgs) exists, obtain its last row to get last simulated episode number
-        name="output.csv"
+        name=f'{self.env_number}_output.csv'
         last_row = None
         if(os.path.exists("saved_models/"+name)):
             with open("saved_models/"+name, 'r') as f:
@@ -121,14 +105,40 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
             self.last_episode_number = 0
             self.episode_number = 0
 
-        # Initialise arrays that wil, store episode data
+        # Initialise arrays that store episode data
         self.episode_drags = np.array([])
         self.episode_areas = np.array([])
         self.episode_lifts = np.array([])
-
+        self.episode_reward = 0
         self.initialized_visualization = False
 
         self.start_class()
+
+        if self.output_params['single_output'] == True:
+            self.action_shape = 1
+        else:
+            self.action_shape = 2
+
+        if self.output_params["probe_type"] == 'pressure':
+
+            if self.output_params['single_input'] == True:
+                self.state_shape = 1
+            else:
+                self.state_shape = len(self.output_params["locations"])
+
+        elif self.output_params["probe_type"] == 'velocity':
+            self.state_shape = 2 * len(self.output_params["locations"])
+
+        if self.output_params["include_actions"]:
+            if self.output_params['single_output'] == True :
+                self.state_shape = self.state_shape + 1
+            else:
+                self.state_shape = self.state_shape + 2
+
+        self.action_space = gym.spaces.Box(shape=(self.action_shape,), low=float(self.optimization_params["min_value_jet_MFR"]), high=float(self.optimization_params["max_value_jet_MFR"]))
+        self.observation_space = gym.spaces.Box(shape=(self.state_shape,), low=-np.inf, high=np.inf)
+
+
 
         print("--- done buffers initialisation ---")
 
@@ -136,7 +146,7 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
         '''
         Initialise attributes needed by the Environment object:
         Initialise history buffers, remesh if necessary, load initialization quantities if not remesh, create flow solver
-        object, initialise probes, make converged flow if necessary, simulate to random position if random_start,
+        object, initialise probes, make converged flow if necessary, simulate to random position if 'random_start',
         fill probes buffer if no. probes changed wrt last remesh
         :return:
         '''
@@ -149,7 +159,8 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
         self.resetted_number_probes = False
 
         self.area_probe = None
-
+        
+       # ------------------------------------------------------------------------
        # Create ring buffers to hold recent history of jet values, probe values, lift, drag, area
         self.history_parameters = {}
 
@@ -210,14 +221,14 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
                 print("Load initial flow state")
 
             # Load initial fields
-            self.flow_params['u_init'] = '/home/issay/UROP/DPC_Flow/Environment/mesh/u_init.xdmf'
-            self.flow_params['p_init'] = '/home/issay/UROP/DPC_Flow/Environment/mesh/p_init.xdmf'
+            self.flow_params['u_init'] = 'mesh/u_init.xdmf'
+            self.flow_params['p_init'] = 'mesh/p_init.xdmf'
 
             if self.verbose > 0:
                 print("Load buffer history")
 
             # Load ring buffers
-            with open('/home/issay/UROP/DPC_Flow/Environment/mesh/dict_history_parameters.pkl', 'rb') as f:
+            with open('mesh/dict_history_parameters.pkl', 'rb') as f:
                 self.history_parameters = pickle.load(f)
 
             # Check everything is good to go
@@ -242,7 +253,9 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
                 self.history_parameters["recirc_area"] = RingBuffer(self.size_history)
                 print("Warning!! No recirculation area history found in the loaded hdf5 file")
 
-            # if not the same number of probes, reset
+            # if not the same number of probes, reset. 
+            # Be careful when changing probes during the training, the code may keep filling the buffer instead of enter the training, if 'size_history' is large.
+            # Remesh is recommended if change the number of probes
             if not self.history_parameters["number_of_probes"] == len(self.output_params["locations"]):
                 for crrt_probe in range(len(self.output_params["locations"])):
                     if self.output_params["probe_type"] == 'pressure':
@@ -255,7 +268,7 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
 
                 print("Warning!! Number of probes was changed! Probes buffer content reset")
 
-                self.resetted_number_probes = False
+                self.resetted_number_probes = True
 
         # ------------------------------------------------------------------------
         # create the flow simulation object
@@ -284,7 +297,6 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
         # prepare the arrays for plotting positions
         self.compute_positions_for_plotting()
 
-
         # ------------------------------------------------------------------------
         # if necessary, make converge
         if self.n_iter_make_ready is not None:
@@ -308,7 +320,7 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
                 self.write_history_parameters()  # Add new step data to history buffers
                 self.visual_inspection()  # Create dynamic plots, show step data in command line and save it to saved_models/debug.csv
                 self.output_data()  # Extend arrays of episode qtys, generate vtu files for area, u and p
-                
+
                 self.solver_step += 1
 
             encoding = XDMFFile.Encoding.HDF5
@@ -316,11 +328,11 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
             comm = mesh.mpi_comm()
 
             # save field data
-            XDMFFile(comm, '/home/issay/UROP/DPC_Flow/Environment/mesh/u_init.xdmf').write_checkpoint(self.u_, 'u0', 0, encoding)
-            XDMFFile(comm, '/home/issay/UROP/DPC_Flow/Environment/mesh/p_init.xdmf').write_checkpoint(self.p_, 'p0', 0, encoding)
+            XDMFFile(comm, 'mesh/u_init.xdmf').write_checkpoint(self.u_, 'u0', 0, encoding)
+            XDMFFile(comm, 'mesh/p_init.xdmf').write_checkpoint(self.p_, 'p0', 0, encoding)
 
             # save buffer dict
-            with open('/home/issay/UROP/DPC_Flow/Environment/mesh/dict_history_parameters.pkl', 'wb') as f:
+            with open('mesh/dict_history_parameters.pkl', 'wb') as f:
                 pickle.dump(self.history_parameters, f, pickle.HIGHEST_PROTOCOL)
 
         # ----------------------------------------------------------------------
@@ -364,9 +376,9 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
 
                     self.history_actions.appendleft(np.zeros(shape=shape))
 
-            # TODO: Execute runs for 1 action step, so we would be running for (T/Nb)*size_history. While it should be just for size_history.
+            # TODO: Execute runs for 1 action step, so we would be running for (T/Nb)*size_history. While it should be just for size_history.  In practice, remesh if probes change
             for _ in range(self.size_history):
-                self.execute()
+                self.step()
 
         # ----------------------------------------------------------------------
         # ready now
@@ -423,16 +435,6 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
             crrt_y = height_cylinder / 2 - jet * height_cylinder
             self.list_positions_jets_x.append(crrt_x)
             self.list_positions_jets_y.append(1.1 * crrt_y)
-
-        name = "Probe.csv"
-        if (not os.path.exists("saved_models")):
-            os.mkdir("saved_models")
-        if (not os.path.exists("saved_models/" + name)):
-            with open("saved_models/" + name, "w") as csv_file:
-                spam_writer = csv.writer(csv_file, delimiter=";", lineterminator="\n")
-                spam_writer.writerow(["number","x_position","y_position"])
-                for write_probe in range(len(self.list_positions_probes_x)):
-                    spam_writer.writerow([write_probe,self.list_positions_probes_x[write_probe],self.list_positions_probes_y[write_probe]])
 
     def show_flow(self):
 
@@ -651,9 +653,9 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
 
         if (self.inspection_params["dump_debug"] != False and self.solver_step % self.inspection_params["dump_debug"] == 0 and self.inspection_params["dump_debug"] < 10000):
             # Save everything that happens in a debug.csv file!
-            name = "debug.csv"
+            name = f'{self.env_number}_debug.csv'
             if(not os.path.exists("saved_models")):
-                os.mkdir("saved_models")
+                os.makedirs("saved_models",exist_ok=True)
             if(not os.path.exists("saved_models/"+name)):
                 with open("saved_models/"+name, "w") as csv_file:
                     spam_writer=csv.writer(csv_file, delimiter=";", lineterminator="\n")
@@ -689,26 +691,24 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
         '''
         Perform output for single runs (testing of strategies or baseline flow)
         '''
-        self.compute_positions_for_plotting()  # Output the probe_positions
         name = "test_strategy.csv"
         if(not os.path.exists("saved_models")):
-            os.mkdir("saved_models")
+            os.makedir("saved_models",exist_ok=True)
         if(not os.path.exists("saved_models/"+name)):
             with open("saved_models/"+name, "w") as csv_file:
                 spam_writer=csv.writer(csv_file, delimiter=";", lineterminator="\n")
-                spam_writer.writerow(["Name", "Step", "Drag", "Lift", "RecircArea"] + ["Jet" + str(v) for v in range(len(self.Qs))])
-                spam_writer.writerow([self.simu_name, self.solver_step, self.history_parameters["drag"].get()[-1], self.history_parameters["lift"].get()[-1], self.history_parameters["recirc_area"].get()[-1]] + [str(v) for v in self.Qs.tolist()])
+                spam_writer.writerow(["Step", "Drag", "Lift", "RecircArea"] + ["Jet" + str(v) for v in range(len(self.Qs))])
+                spam_writer.writerow([self.solver_step, self.history_parameters["drag"].get()[-1], self.history_parameters["lift"].get()[-1], self.history_parameters["recirc_area"].get()[-1]] + [str(v) for v in self.Qs.tolist()])
         else:
             with open("saved_models/"+name, "a") as csv_file:
                 spam_writer=csv.writer(csv_file, delimiter=";", lineterminator="\n")
-                spam_writer.writerow([self.simu_name, self.solver_step, self.history_parameters["drag"].get()[-1], self.history_parameters["lift"].get()[-1], self.history_parameters["recirc_area"].get()[-1]] + [str(v) for v in self.Qs.tolist()])
+                spam_writer.writerow([self.solver_step, self.history_parameters["drag"].get()[-1], self.history_parameters["lift"].get()[-1], self.history_parameters["recirc_area"].get()[-1]] + [str(v) for v in self.Qs.tolist()])
         return
 
     def output_data(self):
         '''
         Extend arrays of episode drag,lift and recirculation
         If episode just ended, record avgs into saved_models/output.csv and empty episode lists
-        Update best_model if improved
         Generate vtu files for area, u and p
         '''
 
@@ -725,9 +725,9 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
             avg_area = np.average(self.episode_areas[len(self.episode_areas)//2:])
             avg_lift = np.average(self.episode_lifts[len(self.episode_lifts)//2:])
 
-            name = "output.csv"
+            name = f'{self.env_number}_output.csv'
             if(not os.path.exists("saved_models")):
-                os.mkdir("saved_models")
+                os.makedirs("saved_models",exist_ok=True)
             if(not os.path.exists("saved_models/"+name)):
                 with open("saved_models/"+name, "w") as csv_file:
                     spam_writer=csv.writer(csv_file, delimiter=";", lineterminator="\n")
@@ -737,52 +737,31 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
                 with open("saved_models/"+name, "a") as csv_file:
                     spam_writer=csv.writer(csv_file, delimiter=";", lineterminator="\n")
                     spam_writer.writerow([self.last_episode_number, avg_drag, avg_lift, avg_area])
+                    
 
             # Also write in Cylinder2DFlowControlWithRL folder (useful to have data of all episodes together in parallel runs)
+            name_epi = "output.csv"
             try:
-                if(not os.path.exists("../episode_averages")):
-                    os.mkdir("../episode_averages")
+                if(not os.path.exists("episode_averages")):
+                    os.makedirs("episode_averages",exist_ok=True)
             except OSError as err:
                 print(err)
 
-            if(not os.path.exists("../episode_averages/"+name)):
-                with open("../episode_averages/"+name, "w") as csv_file:
+            if(not os.path.exists("episode_averages/"+name_epi)):
+                with open("episode_averages/"+name_epi, "w") as csv_file:
                     spam_writer=csv.writer(csv_file, delimiter=";", lineterminator="\n")
-                    spam_writer.writerow(["Episode", "AvgDrag", "AvgLift", "AvgRecircArea"])
-                    spam_writer.writerow([self.last_episode_number, avg_drag, avg_lift, avg_area])
+                    spam_writer.writerow(["Episode", "AvgDrag", "AvgLift", "AvgRecircArea","EnvNum","EpiReward"])
+                    spam_writer.writerow([self.last_episode_number, avg_drag, avg_lift, avg_area, self.env_number, self.episode_reward])
             else:
-                with open("../episode_averages/"+name, "a") as csv_file:
+                with open("episode_averages/"+name_epi, "a") as csv_file:
                     spam_writer=csv.writer(csv_file, delimiter=";", lineterminator="\n")
-                    spam_writer.writerow([self.last_episode_number, avg_drag, avg_lift, avg_area])
+                    spam_writer.writerow([self.last_episode_number, avg_drag, avg_lift, avg_area, self.env_number, self.episode_reward])
 
             # Empty the episode lists for the new episode
             self.episode_drags = np.array([])
             self.episode_areas = np.array([])
             self.episode_lifts = np.array([])
-
-            if(os.path.exists("saved_models/output.csv")):
-                if(not os.path.exists("best_model")):
-                    shutil.copytree("saved_models", "best_model")
-
-                else :
-                    with open("saved_models/output.csv", 'r') as csvfile:
-                        data = csv.reader(csvfile, delimiter = ';')
-                        for row in data:
-                            lastrow = row
-                        last_iter_drag = lastrow[1]  # get avg drag of last episode
-
-                    with open("best_model/output.csv", 'r') as csvfile:
-                        data = csv.reader(csvfile, delimiter = ';')
-                        for row in data:
-                            lastrow = row
-                        best_iter_drag = lastrow[1]  # get avg drag of best episode in best_model/
-
-                    # If last episode model is better than current best model, we replace the best model
-                    if float(best_iter_drag) < float(last_iter_drag):
-                        print("best_model updated")
-                        if(os.path.exists("best_model")):
-                            shutil.rmtree("best_model")
-                        shutil.copytree("saved_models", "best_model")
+            self.episode_reward = 0
 
         if self.inspection_params["dump_vtu"]==False:
             pass
@@ -792,7 +771,7 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
                 self.u_out = File('results/u_out.pvd')
                 self.p_out = File('results/p_out.pvd')
                 self.initialized_vtu = True
-            
+
             # Generate vtu files for area, drag and lift
             if(not self.area_probe is None):
                 self.area_probe.dump(self.area_probe)
@@ -821,7 +800,7 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
             if self.verbose > -1:
                 print("Mean accumulated drag on the whole episode: {}".format(mean_accumulated_drag))
 
-        if self.inspection_params["show_all_at_reset"]:
+        if self.inspection_params["show_all_at_reset"]: # Not used on the cluster
             self.show_drag()
             self.show_control()
 
@@ -831,65 +810,30 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
         if (self.output_params['single_input'] == True):
             probe_loc_mid = int(len(self.output_params["locations"])/2)
             press_asym = np.mean(np.array(self.probes_values)[:probe_loc_mid]) - np.mean(np.array(self.probes_values)[-probe_loc_mid:]) 
-            next_state = dict(obs = np.array(press_asym.reshape(1,)))
+            next_state = np.array(press_asym.reshape(1,))
             print('initialize single_input case')
             # Initialize observation history buffer if history observation history is included in state
-            for n_hist in range(self.optimization_params["num_steps_in_pressure_history"]-1):
-                self.history_observations.appendleft(np.transpose(np.array(self.probes_values)))
+            # In the study using Stablebaselines3, the observation history is implemented by FrameStack
+            
+            # for n_hist in range(self.optimization_params["num_steps_in_pressure_history"]-1):
+            #     self.history_observations.appendleft(np.transpose(np.array(self.probes_values)))
 
-                key = "prev_obs_" + str(n_hist + 1)
-                press_asym = np.mean(self.history_observations[n_hist][:probe_loc_mid]) - np.mean(self.history_observations[n_hist][-probe_loc_mid:])
-                next_state.update({key : np.array(press_asym.reshape(1,))})
-
-        # If observations is based on difference and the sum of pressure measurement at symmetrical locations, e.g. s1=a+b, s2=a-b.
-        elif (self.output_params['asym_input'] == True):
-            probe_mid = int(len(self.output_params["locations"]) / 2)
-            press_asymm = np.zeros(2 * probe_mid)
-            for n_state in range(probe_mid):
-                press_asymm[2 * n_state] = np.array(self.probes_values)[n_state] - np.array(self.probes_values)[
-                    2 * probe_mid - 1 - n_state]  # Difference
-                press_asymm[2 * n_state + 1] = np.array(self.probes_values)[n_state] + np.array(self.probes_values)[
-                    2 * probe_mid - 1 - n_state]  # Summation
-            next_state = dict(obs=np.transpose(np.array(press_asymm)))
-            print('initialize asym_input case')
-
-        # If observations is based on difference of pressure measurement at symmetrical locations, e.g. s=a-b. to enhance antisymmetric feature
-        elif (self.output_params['antisym_input'] == True):
-            probe_mid = int(len(self.output_params["locations"]) / 2)
-            press_asymm = np.zeros(probe_mid)
-            for n_state in range(probe_mid):
-                press_asymm[n_state] = np.array(self.probes_values)[n_state] - np.array(self.probes_values)[
-                    2 * probe_mid - 1 - n_state]  # Difference
-            next_state = dict(obs=np.transpose(np.array(press_asymm)))
-            print('initialize antisym_input case')
-
-        # If observation is only based on force (drag and lift)
-        elif (self.output_params['force_input'] == True):
-            drag_state = np.array(self.history_parameters["drag"].get()[-self.history_length:])
-            lift_state = np.array(self.history_parameters["lift"].get()[-self.history_length:])
-            force = lift_state
-            next_state = dict(obs = force.reshape(self.history_length,))
-            print('initialize force_input case')
-
-        # If observation is based on force (drag and lift) and pressure measurements
-        elif (self.output_params['force_pressure'] == True):
-            drag_state = np.array(self.history_parameters["drag"].get()[-self.history_length:])
-            lift_state = np.array(self.history_parameters["lift"].get()[-self.history_length:])
-            force = lift_state
-            observe = np.hstack((np.transpose(np.array(self.probes_values)),force.reshape(self.history_length,))) # Combine force and pressure measurements
-            next_state = dict(obs = observe)
-            print('initialize force_pressure case')
-
+            #     key = "prev_obs_" + str(n_hist + 1)
+            #     press_asym = np.mean(self.history_observations[n_hist][:probe_loc_mid]) - np.mean(self.history_observations[n_hist][-probe_loc_mid:])
+            #     next_state.update({key : np.array(press_asym.reshape(1,))})
+        
         # If observations is based on raw pressure probes    
         else:
-            next_state = dict(obs = np.transpose(np.array(self.probes_values)))
+            next_state = np.transpose(np.array(self.probes_values))
 
             # Initialize observation history buffer if history observation history is included in state
-            for n_hist in range(self.optimization_params["num_steps_in_pressure_history"]-1):
-                self.history_observations.appendleft(np.transpose(np.array(self.probes_values)))
+            # In the study using Stablebaselines3, the observation history is implemented by FrameStack
+            
+            # for n_hist in range(self.optimization_params["num_steps_in_pressure_history"]-1):
+            #     self.history_observations.appendleft(np.transpose(np.array(self.probes_values)))
                 
-                key = "prev_obs_" + str(n_hist + 1)
-                next_state.update({key : self.history_observations[n_hist]})
+            #     key = "prev_obs_" + str(n_hist + 1)
+            #     next_state.update({key : self.history_observations[n_hist]})
 
         # Initialize action history buffer if action history is included in state
         if self.output_params["include_actions"]:
@@ -898,33 +842,34 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
             else:
                 shape = (2,)
             
-            next_state.update({'act' : np.zeros(shape=shape)})
+            next_state = np.append(next_state, np.zeros(shape=shape))
 
-            for n_hist in range(self.optimization_params["num_steps_in_pressure_history"]-1):
-                self.history_actions.appendleft(np.zeros(shape=shape))
+            # In the study using Stablebaselines3, the observation history is implemented by FrameStack
+            
+            # for n_hist in range(self.optimization_params["num_steps_in_pressure_history"]-1):
+            #     self.history_actions.appendleft(np.zeros(shape=shape))
 
-                key = "prev_act_" + str(n_hist + 1)
-                next_state.update({key : self.history_actions[n_hist]})
+            #     key = "prev_act_" + str(n_hist + 1)
+            #     next_state.update({key : self.history_actions[n_hist]})
 
             
-        if self.verbose > 0:
-            print(next_state["obs"])
+        #if self.verbose > 0:
+            #print(next_state["obs"])
 
         self.episode_number += 1
 
-        return(next_state)
+        return next_state
 
-    def execute(self, actions=None):
+    def step(self, actions=None):
         '''
         Run solver for one action step, until next RL env state (For the flow solver this means to run for number_steps_execution)
-        In this interval, control is made continuous between actions and net MFR = 0 is imposed
+        In this interval, control is made continuous (FOH with small simulation step) between actions and net MFR = 0 is imposed
         :param: actions
         :return: next state (probe values at end of action step)
                  terminal
-                 reward (- CD (-) mean over action step + 0.2 * abs of CL mean over action step)
+                 reward (check env.py and compute_reward() function for the reward used)
         '''
         action = actions
-     
 
 
         if action is None:
@@ -934,7 +879,7 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
             nbr_jets = 2
             action = np.zeros((nbr_jets, ))
         elif ((self.output_params['single_output'] is True) and (self.output_params['symmetric'] is True)):
-            action = np.concatenate([action,action])
+            action = np.concatenate([action,action])#if single output, the dimension of action will be 1, therefore after concatenation becoming 2
         
         elif (self.output_params['single_output'] is True):
             action = np.concatenate([action,-action])
@@ -948,19 +893,15 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
         # Append last observation to pressure history buffer
         self.history_observations.appendleft(np.transpose(np.array(self.probes_values)))
 
-        '''output_for_me = []
-        input_for_me = []'''
         # Run for one action step (several -number_steps_execution- numerical timesteps keeping action=const but changing control)
         for crrt_control_nbr in range(self.number_steps_execution):
 
             # Try to enforce a continuous, smoother control
             if "smooth_control" in self.optimization_params:
-                # Original approach used in the JFM paper
+                # Original approach used in the Rabault et al. 2019
                 # self.Qs += self.optimization_params["smooth_control"] * (np.array(action) - self.Qs)
                 # Linear interpolation in the control
                 self.Qs = np.array(self.previous_action) + (np.array(self.action) - np.array(self.previous_action)) * ((crrt_control_nbr + 1) / self.number_steps_execution)
-            elif "no_control" in self.optimization_params:
-                self.Qs = np.zeros((nbr_jets, )) # Disable the control to obtain uncontrolled measurements
             else:
                 self.Qs = np.transpose(np.array(action))
 
@@ -991,20 +932,14 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
 
             self.accumulated_drag += self.drag
             self.accumulated_lift += self.lift
-
-            '''probe_loc_mid = int(len(self.output_params["locations"])/2)
-            press_asym = np.mean(np.array(self.probes_values)[:probe_loc_mid]) - np.mean(np.array(self.probes_values)[-probe_loc_mid:])
-            output_for_me.append(press_asym)
-            input_for_me.extend(np.ndarray.tolist(self.Qs))'''
             
-
-        state_ob = dict(obs = np.transpose(np.array(self.probes_values_ob))) # Save the pressure measurements for observation
+        wake_ob = np.transpose(np.array(self.probes_values_ob)) # Save the pressure measurements for observation
+        
         # If observations is based on difference of average top and bottom pressures
-
         if (self.output_params['single_input'] == True):
             probe_loc_mid = int(len(self.output_params["locations"])/2)
             press_asym = np.mean(np.array(self.probes_values)[:probe_loc_mid]) - np.mean(np.array(self.probes_values)[-probe_loc_mid:]) 
-            next_state = dict(obs = np.array(press_asym.reshape(1,)))
+            next_state = np.array(press_asym.reshape(1,))
         
             # Update past observations if previous history is included in state
             for n_hist in range(self.optimization_params["num_steps_in_pressure_history"]-1):
@@ -1012,45 +947,10 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
 
                 press_asym = np.mean(self.history_observations[n_hist][:probe_loc_mid]) - np.mean(self.history_observations[n_hist][-probe_loc_mid:])
                 next_state.update({key : np.array(press_asym.reshape(1,))})
-
-        # If observations is based on difference and the sum of pressure measurement at symmetrical locations, e.g. s1=a+b, s2=a-b.
-        elif (self.output_params['asym_input'] == True):
-            probe_mid = int(len(self.output_params["locations"]) / 2)
-            press_asymm = np.zeros(2 * probe_mid)
-            for n_state in range(probe_mid):
-                press_asymm[2 * n_state] = np.array(self.probes_values)[n_state] - np.array(self.probes_values)[
-                    2 * probe_mid - 1 - n_state]  # Difference
-                press_asymm[2 * n_state + 1] = np.array(self.probes_values)[n_state] + np.array(self.probes_values)[
-                    2 * probe_mid - 1 - n_state]  # Summation
-            next_state = dict(obs=np.transpose(np.array(press_asymm)))
-
-        # If observations is based on difference of pressure measurement at symmetrical locations, e.g. s=a-b. to enhance antisymmetric feature
-        elif (self.output_params['antisym_input'] == True):
-            probe_mid = int(len(self.output_params["locations"]) / 2)
-            press_anti = np.zeros(probe_mid)
-            for n_state in range(probe_mid):
-                press_anti[n_state] = np.array(self.probes_values)[n_state] - np.array(self.probes_values)[
-                    2 * probe_mid - 1 - n_state]  # Difference
-            next_state = dict(obs=np.transpose(np.array(press_anti)))
-
-        # If observation is only based on force (drag and lift)
-        elif (self.output_params['force_input'] == True):
-            drag_state = np.array(self.history_parameters["drag"].get()[-self.history_length:])
-            lift_state = np.array(self.history_parameters["lift"].get()[-self.history_length:])
-            force = lift_state
-            next_state = dict(obs = force.reshape(self.history_length,))
-
-        # If observation is based on force (drag and lift) and pressure measurements
-        elif (self.output_params['force_pressure'] == True):
-            drag_state = np.array(self.history_parameters["drag"].get()[-self.history_length:])
-            lift_state = np.array(self.history_parameters["lift"].get()[-self.history_length:])
-            force = lift_state
-            observe = np.hstack((np.transpose(np.array(self.probes_values)),force.reshape(self.history_length,))) # Combine force and pressure measurements
-            next_state = dict(obs = observe)
-
+        
         # If observations is based on raw pressure probes    
         else:
-            next_state = dict(obs = np.transpose(np.array(self.probes_values)))
+            next_state = np.transpose(np.array(self.probes_values))
             
             # Update past observations if previous history is included in state
             for n_hist in range(self.optimization_params["num_steps_in_pressure_history"]-1):
@@ -1059,9 +959,9 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
 
         # Update action history buffer if action history is included in state
         if self.output_params["include_actions"]:
-            next_state.update({'act' : actions})
+            next_state = np.append(next_state, action)
 
-            for n_hist in range(self.optimization_params["num_steps_in_pressurepress_anti_history"]-1):
+            for n_hist in range(self.optimization_params["num_steps_in_pressure_history"]-1):
                 key = "prev_act_" + str(n_hist + 1)
                 next_state.update({key : self.history_actions[n_hist]})
             
@@ -1077,19 +977,21 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
         if self.verbose > 2:
             print(terminal)
 
-        #reward = self.compute_reward(np.array(self.action))
+        reward = self.compute_reward(np.array(self.Qs))
+        
+        self.episode_reward = self.episode_reward + reward
 
-        #self.save_reward(reward)
+        self.save_reward(reward)
+        self.save_wake_ob(wake_ob)
         self.save_state(next_state)
-        self.save_state_ob(state_ob)
 
-        # if self.verbose > 2:
-        #     print(reward)
+        if self.verbose > 2:
+            print(reward)
 
         if self.verbose > 1:
             print("--- done execute ---")
 
-        return(press_asym, self.solver_step) #,output_for_me,input_for_me) # self.probes_values
+        return next_state, reward, terminal, {}
 
     def compute_reward(self,actionz=0):
         mean_drag_no_control = - self.inspection_params['line_drag']
@@ -1098,35 +1000,44 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
         if self.reward_function == 'plain_drag':  # a bit dangerous, may be injecting some momentum
             values_drag_in_last_execute = self.history_parameters["drag"].get()[-self.number_steps_execution:]
             return(np.mean(values_drag_in_last_execute) + mean_drag_no_control)
+        
         elif(self.reward_function == 'recirculation_area'):
             return - self.area_probe.sample(self.u_, self.p_)
+        
         elif(self.reward_function == 'max_recirculation_area'):
             return self.area_probe.sample(self.u_, self.p_)
+        
         elif self.reward_function == 'drag':  # a bit dangerous, may be injecting some momentum
             return self.history_parameters["drag"].get()[-1] + mean_drag_no_control
+        
         elif self.reward_function == 'drag_plain_lift':  # a bit dangerous, may be injecting some momentum
             avg_length = min(500, self.number_steps_execution)
             avg_drag = np.mean(self.history_parameters["drag"].get()[-avg_length:])
             avg_lift = np.mean(self.history_parameters["lift"].get()[-avg_length:])
             return avg_drag + mean_drag_no_control - 0.2 * abs(avg_lift)
+        
         elif self.reward_function == 'max_plain_drag':  # a bit dangerous, may be injecting some momentum
             values_drag_in_last_execute = self.history_parameters["drag"].get()[-self.number_steps_execution:]
             return - (np.mean(values_drag_in_last_execute) + mean_drag_no_control)
+        
         elif self.reward_function == 'drag_avg_abs_lift':  # a bit dangerous, may be injecting some momentum
             avg_length = min(500, self.number_steps_execution)
             avg_abs_lift = np.mean(np.absolute(self.history_parameters["lift"].get()[-avg_length:]))
             avg_drag = np.mean(self.history_parameters["drag"].get()[-avg_length:])
             return avg_drag + mean_drag_no_control - 0.2 * avg_abs_lift
+        
         elif self.reward_function== 'quadratic_reward_0Q':
             avg_length = min(500, self.number_steps_execution)
             avg_drag = np.mean(self.history_parameters["drag"].get()[-avg_length:])
             avg_momentum=np.mean(abs(self.history_parameters["jet_0"].get()[-avg_length:]))
             return ((mean_drag_no_control+avg_drag)*abs(mean_drag_no_control+avg_drag)) - ((avg_momentum*avg_momentum)) 
+        
         elif self.reward_function== 'quadratic_reward_Drag':
             avg_length = min(500, self.number_steps_execution)
             avg_drag = np.mean(self.history_parameters["drag"].get()[-avg_length:])
             avg_momentum=np.mean(abs(self.history_parameters["jet_0"].get()[-avg_length:]))
             return -(avg_drag*avg_drag) +  (mean_drag_no_control*mean_drag_no_control) 
+        
         elif self.reward_function== 'quadratic_reward':
             avg_length = min(500, self.number_steps_execution)
             avg_drag = np.mean(self.history_parameters["drag"].get()[-avg_length:])
@@ -1134,12 +1045,13 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
             jet1_array=np.array(self.history_parameters["jet_1"].get()[-50:])
             momentum_array=jet0_array+jet1_array
             avg_momentum=np.mean(momentum_array)
-            return ((mean_drag_no_control+avg_drag)*abs(mean_drag_no_control+avg_drag)) - ((avg_momentum*avg_momentum)) 
+            return ((mean_drag_no_control+avg_drag)*abs(mean_drag_no_control+avg_drag)) - ((avg_momentum*avg_momentum))
         
         elif self.reward_function== 'linear_reward':
             avg_length = min(500, self.number_steps_execution)
             avg_drag = np.mean(self.history_parameters["drag"].get()[-avg_length:])
-            return -abs(0.6225-abs(avg_drag)) - np.mean(actionz)  
+            return -abs(0.6225-abs(avg_drag)) - np.mean(actionz)
+        
         elif self.reward_function== 'linear_reward_0Q':
             avg_length = min(500, self.number_steps_execution)
             avg_drag = np.mean(self.history_parameters["drag"].get()[-avg_length:])
@@ -1180,17 +1092,71 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
             b=[0.996863335697075,	-2.99059000709123,	2.99059000709123,	-0.996863335697075]
             a=[1,	-2.99371681727665,	2.98745335824285,	-0.993736510057099]
             filter_drag=signal.lfilter(b,a,drag_array)
-            # peaki=peakutils.peak.indexes(filter_drag,thres=0.003,thres_abs=True)
-            # troughi=peakutils.peak.indexes(-filter_drag,thres=0.003,thres_abs=True)
+            peaki=peakutils.peak.indexes(filter_drag,thres=0.003,thres_abs=True)
+            troughi=peakutils.peak.indexes(-filter_drag,thres=0.003,thres_abs=True)
             amplitude=np.absolute(filter_drag[peaki[-1]])+np.absolute(filter_drag[troughi[-1]])
             print(amplitude)
             return -amplitude
-
+        
+        elif self.reward_function == 'ins_drag_lift':
+            ins_drag = np.mean(self.history_parameters["drag"].get()[-1:])
+            ins_lift = np.mean(self.history_parameters["lift"].get()[-1:])
+            return ins_drag + mean_drag_no_control - 0.2 * abs(ins_lift)
+        
+        elif self.reward_function=='ins_drag_action':
+            ins_drag = np.mean(self.history_parameters["drag"].get()[-1:])
+            ins_action = abs(actionz[0])
+            weight = 2
+            return ins_drag + mean_drag_no_control - weight * ins_action
+            
+        elif self.reward_function=='power_reward':
+            # The instantaneous power at each control action step
+            Uinf = 1
+            rhoinf = 1
+            Sa = 0.1 # Area of the jet
+            PD = self.history_parameters["drag"].get()[-1]*Uinf # Power of drag = D*Uinf
+            PD0 = mean_drag_no_control*Uinf # Power of drag from baseline flow. Note: 'mean_drag_no_control' is hard coded
+            dPD = abs(PD0)-abs(PD)
+            actuation = self.history_parameters["jet_0"].get()[-1]
+            Pact = abs(actuation)**3/(Sa**2*rhoinf**2)
+            
+            return dPD - Pact
+        
+        elif self.reward_function=='Tavg_power_reward':
+            # The time-averaged power between control action steps
+            avg_length = min(500, self.number_steps_execution)
+            Uinf = 1
+            rhoinf = 1
+            Sa = 0.1 # Area of the jet
+            PD = np.mean(self.history_parameters["drag"].get()[-avg_length:])*Uinf # Time-averaged power of drag
+            PD0 = mean_drag_no_control*Uinf # Power of drag from last action step
+            dPD = abs(PD0)-abs(PD)
+            actuation = np.mean(self.history_parameters["jet_0"].get()[-avg_length:])
+            Pact = abs(actuation)**3/(Sa**2*rhoinf**2)
+            
+            return dPD - Pact
         # TODO: implement some reward functions that take into account how much energy / momentum we inject into the flow
 
         else:
             raise RuntimeError("Reward function {} not yet implemented".format(self.reward_function))
 
+    def save_wake_ob(self, next_wake_ob):
+        # Use the probe setup same as 'inflow64' for collecting the wake statistics
+        name = "wake_ob.csv"
+        if (not os.path.exists("saved_models")):
+            os.mkdir("saved_models")
+        if (not os.path.exists("saved_models/" + name)):
+            with open("saved_models/" + name, "w") as csv_state:
+                spam_writer = csv.writer(csv_state, delimiter=";", lineterminator="\n")
+                spam_writer.writerow(["Episode", "Step", "wake_ob"])
+                for v in next_wake_ob:
+                    spam_writer.writerow([self.episode_number, self.solver_step, v])
+        else:
+            with open("saved_models/" + name, "a") as csv_state:
+                spam_writer = csv.writer(csv_state, delimiter=";", lineterminator="\n")
+                for v in next_wake_ob:
+                    spam_writer.writerow([self.episode_number, self.solver_step, v])
+                        
     def save_state(self, next_state):
 
         name = "state.csv"
@@ -1200,36 +1166,14 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
             with open("saved_models/" + name, "w") as csv_state:
                 spam_writer = csv.writer(csv_state, delimiter=";", lineterminator="\n")
                 spam_writer.writerow(["Episode", "Step", "State"])
-                for key, value in next_state.items():
-                    for v in value:
-                        spam_writer.writerow([self.episode_number, self.solver_step, v])
+                for v in next_state:
+                    spam_writer.writerow([self.episode_number, self.solver_step, v])
         else:
             with open("saved_models/" + name, "a") as csv_state:
                 spam_writer = csv.writer(csv_state, delimiter=";", lineterminator="\n")
-                for key, value in next_state.items():
-                    for v in value:
-                        spam_writer.writerow([self.episode_number, self.solver_step, v])
-
-    def save_state_ob(self, next_state_ob):
-
-        name = "state_ob.csv"
-        if (not os.path.exists("saved_models")):
-            os.mkdir("saved_models")
-        if (not os.path.exists("saved_models/" + name)):
-            with open("saved_models/" + name, "w") as csv_state:
-                spam_writer = csv.writer(csv_state, delimiter=";", lineterminator="\n")
-                spam_writer.writerow(["Episode", "Step", "State_ob"])
-                for key, value in next_state_ob.items():
-                    for v in value:
-                        spam_writer.writerow([self.episode_number, self.solver_step, v])
-        else:
-            with open("saved_models/" + name, "a") as csv_state:
-                spam_writer = csv.writer(csv_state, delimiter=";", lineterminator="\n")
-                for key, value in next_state_ob.items():
-                    for v in value:
-                        spam_writer.writerow([self.episode_number, self.solver_step, v])
-
-
+                for v in next_state:
+                    spam_writer.writerow([self.episode_number, self.solver_step, v])
+                        
     def save_reward(self, reward):
 
         name = "rewards.csv"
@@ -1245,94 +1189,47 @@ class Env2DCylinder(): #class Env2DCylinder(Environment):
                 spam_writer = csv.writer(csv_file, delimiter=";", lineterminator="\n")
                 spam_writer.writerow([self.episode_number, self.solver_step-1, reward])
 
-
-    def states(self):
-        '''
-        Returns the state space specification.
-        :return: dictionary of state descriptions with the following attributes:
-        type ("bool" / "int" / "float") – state data type (required)
-        shape (int > 0 / iter[int > 0]) – state shape (default: scalar)
-        '''
-
-        if self.output_params["probe_type"] == 'pressure':
-            # If observations is based on difference of average top and bottom pressures
-            if (self.output_params['single_input'] == True):
-                states = dict(obs = dict(type='float', shape=(1, )))
-                
-                # Add nested dict if previous history is included in state
-                for n_hist in range(self.optimization_params["num_steps_in_pressure_history"] - 1):
-                    states.update({"prev_obs_"+ str(n_hist+1) : dict(type='float', shape=(1, ))})
-
-            # If observations is based on difference and the sum of pressure measurement at symmetrical locations, e.g. s1=a+b, s2=a-b.
-            elif (self.output_params['asym_input'] == True):
-                states = dict(obs = dict(type='float', shape=(len(self.output_params["locations"]),)))
-
-            # If observations is based on difference of pressure measurement at symmetrical locations, e.g. s=a-b. to enhance antisymmetric feature
-            elif (self.output_params['antisym_input'] == True):
-                states = dict(obs = dict(type='float', shape=(len(self.output_params["locations"])/2,)))
-
-            # If observation is only based on force (drag and lift)
-            elif (self.output_params['force_input'] == True):
-                states = dict(obs = dict(type='float', shape=(self.history_length, )))
-
-            # If observation is  based on force (drag and lift) and pressure measurements
-            elif (self.output_params['force_pressure'] == True):
-                shape_fp = len(self.output_params["locations"]) + self.history_length
-                states = dict(obs=dict(type='float', shape=(shape_fp,)))
-
-            # If observations is based on raw pressure probes
-            else:
-                states = dict(obs = dict(type='float', shape=(len(self.output_params["locations"]), )))
-                
-                # Add nested dict if previous history is included in state
-                for n_hist in range(self.optimization_params["num_steps_in_pressure_history"] - 1):
-                    states.update({"prev_obs_"+ str(n_hist+1) : dict(type='float', shape=(len(self.output_params["locations"]), ))})
-
-            if self.output_params["include_actions"]:
-                if (self.output_params['single_output'] == True):
-                    shape = (1,)
-                else:
-                    shape = (2,)
-
-                states.update({"act" : dict(type='float', shape=shape)})
-
-                for n_hist in range(self.optimization_params["num_steps_in_pressure_history"] - 1):
-                    states.update({"prev_act_"+ str(n_hist+1) : dict(type='float', shape=shape)})
-
-
-            return states
-
-        elif self.output_params["probe_type"] == 'velocity':
-            states = dict(obs = dict(type='float',shape=(2 * len(self.output_params["locations"]), )))
-
-            # Add nested dict if previous history is included in state
-            for n_hist in range(self.optimization_params["num_steps_in_pressure_history"] - 1):
-                states.update({"prev_obs_"+ str(n_hist+1) : dict(type='float', shape=(2 * len(self.output_params["locations"]), ))})
-            
-            return states
-
-    def actions(self):
-        '''
-        Returns the action space specification.
-        :return: dictionary of action descriptions with the following attributes:
-        type ("bool" / "int" / "float") – action data type (required)
-        shape (int > 0 / iter[int > 0]) – action shape
-        min_value/max_value (float) – minimum/maximum action value
-        '''
-
-        # NOTE: we could also have several levels of dict in dict, for example:
-        # return { str(i): dict(continuous=True, min_value=0, max_value=1) for i in range(self.n + 1) }
-
-        if (self.output_params['single_output'] == True):
-            return dict(type='float',
-                        shape=(1, ),
-                        min_value=self.optimization_params["min_value_jet_MFR"],
-                        max_value=self.optimization_params["max_value_jet_MFR"])
-        else:
-            return dict(type='float',
-                        shape=(2, ),
-                        min_value=self.optimization_params["min_value_jet_MFR"],
-                        max_value=self.optimization_params["max_value_jet_MFR"])
-
     def max_episode_timesteps(self):
         return None
+
+    def read_buffer_n(self, measure_type, n: int):
+        
+        # Read last n data from the buffer
+        if measure_type == 'drag':
+            y = self.history_parameters["drag"].get()[-n:]
+        elif measure_type == 'lift':
+            y = self.history_parameters["lift"].get()[-n:]
+        elif measure_type == 'pressure':
+            y = None
+            for probe in range(len(self.output_params["locations"])):
+                if self.output_params["probe_type"] == 'pressure':
+                    pressure = self.history_parameters["probe_{}".format(probe)].get()[-n:]
+                    pressure = pressure.reshape((-1,1))
+                y = np.vstack([y, pressure]) if y is not None else pressure
+        else:
+            assert('Unknown type of measurements.')
+            
+        u = self.history_parameters["jet_0"].get()[-n:]
+        
+        return u, y
+    
+    def read_buffer_all(self, measure_type):
+        
+        # Read last n data from the buffer
+        if measure_type == 'drag':
+            y = self.history_parameters["drag"].get()
+        elif measure_type == 'lift':
+            y = self.history_parameters["lift"].get()
+        elif measure_type == 'pressure':
+            y = None
+            for probe in range(len(self.output_params["locations"])):
+                if self.output_params["probe_type"] == 'pressure':
+                    pressure = self.history_parameters["probe_{}".format(probe)].get()
+                    pressure = pressure.reshape((-1,1))
+                y = np.vstack([y, pressure]) if y is not None else pressure
+        else:
+            assert('Unknown type of measurements.')
+            
+        u = self.history_parameters["jet_0"].get()
+        
+        return u, y

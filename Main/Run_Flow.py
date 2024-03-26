@@ -37,7 +37,9 @@ from cvxpy.expressions.expression import Expression
 from cvxpy.constraints.constraint import Constraint
 from DPC_cvxpy import DeePC
 from Utils.utils import Data
-from Build_sys import System, GymSystem
+from Build_sys import System, GymSystem, FlowSystem
+
+from Environment.env import resume_env, nb_actuations
 
 # Define the loss function for DeePC
 def loss_callback(u: cp.Variable, y: cp.Variable) -> Expression:
@@ -64,9 +66,9 @@ T_INI = 2                  # Size of the initial set of data
 T_tr = 100
 T_list = [T_tr]              # Number of data points used to estimate the system
 HORIZON = 10               # Horizon length
-LAMBDA_G_REGULARIZER = 0.5   # Regularization on g (see DeePC paper, eq. 8)
-LAMBDA_Y_REGULARIZER = 2  # Regularization on sigmay (see DeePC paper, eq. 8)
-LAMBDA_U_REGULARIZER = 2   # Regularization on sigmau
+LAMBDA_G_REGULARIZER = 0   # Regularization on g (see DeePC paper, eq. 8)
+LAMBDA_Y_REGULARIZER = 0  # Regularization on sigmay (see DeePC paper, eq. 8)
+LAMBDA_U_REGULARIZER = 8   # Regularization on sigmau
 EXPERIMENT_HORIZON = 100    # Total number of steps
 dim_u = 1 # The number of control actions, e.g. only 1 mass flow rate is needed for jets
 dim_y = 1 # The number of measurements, e.g. 64 sensors for pressure or 32 for antisymmetric pressure measurements
@@ -79,17 +81,12 @@ sim_run = 200 # Non-dimensional running time for control
 num_g = T_tr-T_INI-HORIZON+1 # Dimension of g or the width of final Hankel matrix
 action_step_size = 1 # Action step in nondimensional time unit
 
-# model parameters and set up model system
-A = np.array([[0.70469, 0.],
-        [0.24664, 0.70469]])
-B = np.array([[0.75937], [0.12515]])
-C = np.array([[0., 1.]])
-D = np.zeros((C.shape[0], B.shape[1]))
 
-cano_qp = True;
+cano_qp = False;
 
-sys = System(scipysig.StateSpace(A, B, C, D, dt=1))
-# sys = GymSystem()
+
+sys = FlowSystem()
+
 
 fig, ax = plt.subplots(1,2)
 plt.margins(x=0, y=0)
@@ -114,8 +111,7 @@ for T in T_list:
     ## Initialize DeePC object with excitation data np.random.normal(size=T).reshape((T, 1))
     #np.random.seed(10)
     
-    data = sys.apply_input(u = np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. ), noise_std=0) #np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. )
-
+    data = sys.apply_input(u = np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. )) #, noise_std=0) #np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. )
     #data = sys.apply_input(u = np.random.uniform(-3,3,T).reshape((T, 1)), noise_std=0)
     deepc = DeePC(data, Tini = T_INI, horizon = HORIZON)
     
@@ -151,7 +147,7 @@ for T in T_list:
             Uo, info = deepc.solve(data_ini = data_ini, warm_start=True)
         
         # Apply optimal control input for one step
-        _ = sys.apply_input(u = Uo[:s, :], noise_std=0)
+        _ = sys.apply_input(u = Uo[:s, :], noise_std=1e-1)
         
         # Fetch last T_INI samples
         data_ini = sys.get_last_n_samples(T_INI)

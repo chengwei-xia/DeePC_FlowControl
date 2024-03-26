@@ -3,6 +3,7 @@ import scipy.signal as scipysig
 from typing import Optional
 from Utils.utils import Data
 import gym
+from Environment.env import resume_env, nb_actuations
 
 class System(object):
     """
@@ -131,7 +132,7 @@ class GymSystem(object):
         """
         self.u = None if data_ini is None else data_ini.u
         self.y = None if data_ini is None else data_ini.y
-        obs_ini, info = self.env.reset()
+        #obs_ini, info = self.env.reset()
         
     def close(self):
         """
@@ -139,4 +140,83 @@ class GymSystem(object):
         """
         self.env.close()
 
+class FlowSystem(object):
+    """
+    Set up a gym system to collect i/o data
+    """
+    def __init__(self, x0: Optional[np.ndarray] = None):
+        """
+        :param env: a gym system, e.g. inverted pendulum
+        :param x0: initial state
+        """
+        self.env = resume_env(plot=False, dump_CL=False, dump_debug=10, n_env=1)
+        # assert x0 is None or sys.A.shape[0] == len(x0), 'Invalid initial condition'
+        # self.env = env
+        # self.x0 = x0 if x0 is not None else np.zeros(sys.A.shape[0])
+        self.u = None # Buffer for u
+        self.y = None
+
+    def apply_input(self, u: np.ndarray, noise_std: float = 0.5) -> Data:
+        """
+        Applies an input signal to the system.
+        :param u: input signal. Needs to be of shape T x M, where T is the batch size and
+                  M is the number of features
+        :param noise_std: standard deviation of the measurement noise
+        :return: tuple that contains the (input,output) of the system
+        """
+        
+        T = len(u)
+        u_run = None
+        y_run = None
+        
+        for k in range(T):
+            
+            y, reward, terminated, truncated, info = self.env.step(u[k])
+
+            #if terminated or truncated:
+            #    y, info = self.env.reset()
+
+            y = y + noise_std * np.random.normal(size = 1)
+            
+            u_run = np.vstack([u_run, u[k]]) if u_run is not None else u[k] # Fill the buffer for single run
+            y_run = np.vstack([y_run, y]) if y_run is not None else y
+            
+        self.u = np.vstack([self.u, u_run]) if self.u is not None else u_run # Fill the buffer for all data
+        self.y = np.vstack([self.y, y_run]) if self.y is not None else y_run
+            
+        return Data(u_run, y_run)
+
+    def get_last_n_samples(self, n: int) -> Data:
+        """
+        Returns the last n samples
+        :param n: integer value
+        """
+        measure_type = 'drag'
+        u, y = self.env.read_buffer_n(measure_type=measure_type, n=n)
+        
+        return Data(u,y)
+
+    def get_all_samples(self) -> Data:
+        """
+        Returns all samples from the flow system
+        """
+        measure_type = 'drag'
+        u, y = self.env.read_buffer_all(measure_type=measure_type)
+        return Data(u,y)
+
+    def reset(self, data_ini: Optional[Data] = None, x0: Optional[np.ndarray] = None):
+        """
+        Reset initial state and collected data
+        """
+        self.env.reset()
+        
+        self.u = None if data_ini is None else data_ini.u
+        self.y = None if data_ini is None else data_ini.y
+        #obs_ini, info = self.env.reset()
+        
+    def close(self):
+        """
+        Close gym environment
+        """
+        self.env.close()
 
