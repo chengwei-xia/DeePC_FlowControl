@@ -308,11 +308,12 @@ class DeePC(object):
         
         self.x = cp.Variable(shape=(self.x_dim), name='x')
         
-        Q = np.zeros([self.M * self.horizon,self.M * self.horizon]) #0.001*np.eye(self.M * self.horizon)
-        R = np.eye(self.P * self.horizon)
         G_g = lambda_g * np.eye(self.num_g)
         Su = lambda_u * np.eye(self.M * self.Tini)
         Sy = lambda_y * np.eye(self.P * self.Tini)
+        Q = np.zeros([self.M * self.horizon,self.M * self.horizon]) #0.001*np.eye(self.M * self.horizon)
+        R = 5*np.eye(self.P * self.horizon)
+        
         
         # Formulate loss function
         P = block_diag(G_g,Su,Sy,Q,R)

@@ -45,8 +45,8 @@ from Environment.env import resume_env, nb_actuations
 # Define the loss function for DeePC
 def loss_callback(u: cp.Variable, y: cp.Variable) -> Expression:
     horizon, M, P = u.shape[0], u.shape[1], y.shape[1]
-    ref = np.ones(y.shape)
-    return  cp.norm(y-ref,'fro')**2
+    ref = 0*np.ones(y.shape)
+    return  5*cp.norm(y-ref,'fro')**2
 
 def loss_gym(u: cp.Variable, y: cp.Variable) -> Expression:
     horizon, M, P = u.shape[0], u.shape[1], y.shape[1]
@@ -58,46 +58,32 @@ def constraints_callback(u: cp.Variable, y: cp.Variable) -> List[Constraint]:
     horizon, M, P = u.shape[0], u.shape[1], y.shape[1]
     # Define a list of input/output constraints
     # no real constraints on y, input should be between -1 and 1
-    return [u >= -1, u <= 1]
+    return [u >= 0, u <= 0.1]
 
 ###### Setup parameters ###### 
 
 s = 1                       # How many steps to apply predicted control in receding horizon, usually apply only one step
-T_INI = 2                  # Size of the initial set of data
-T_tr = 10
+T_INI = 10                  # Size of the initial set of data
+T_tr = 100
 T_list = [T_tr]              # Number of data points used to estimate the system
-HORIZON = 2               # Horizon length
+HORIZON = 10               # Horizon length
 LAMBDA_G_REGULARIZER = 0   # Regularization on g (see DeePC paper, eq. 8)
 LAMBDA_Y_REGULARIZER = 0  # Regularization on sigmay (see DeePC paper, eq. 8)
-LAMBDA_U_REGULARIZER = 8   # Regularization on sigmau
+LAMBDA_U_REGULARIZER = 0   # Regularization on sigmau
+LAMBDA_PROJ_REGULARIZER = 0
 EXPERIMENT_HORIZON = 100    # Total number of steps
 dim_u = 1 # The number of control actions, e.g. only 1 mass flow rate is needed for jets
 dim_y = 1 # The number of measurements, e.g. 64 sensors for pressure or 32 for antisymmetric pressure measurements
-
-dt = 0.004 # Time step for flow simulation
-t_c = 0.5 # Sampling time step of control action, the number of numerical steps is t_c/dt = 125, consistent with RL
-sim_tr = 200 # Non-dimensional training time. For numerical steps, use steps = sim_tr/dt
-sim_run = 200 # Non-dimensional running time for control
-
 num_g = T_tr-T_INI-HORIZON+1 # Dimension of g or the width of final Hankel matrix
-action_step_size = 1 # Action step in nondimensional time unit
 
-
-cano_qp = False;
-
+cano_qp = False
+Use_offline_data = True
 
 sys = FlowSystem()
-
 
 fig, ax = plt.subplots(1,2)
 plt.margins(x=0, y=0)
 
-## Initialize matrices to store data
-num_action = int(T_tr/action_step_size)
-utr = np.zeros([dim_u,num_action])
-ytr = np.zeros([dim_y,num_action])
-# urun = np.zeros([num_u,num_action])
-# yrun = np.zeros([num_y,num_action])
 
 ##### Data Collection (Parallelization needs development) ######
 
@@ -109,11 +95,37 @@ for T in T_list:
 
     sys.reset()
 
-    
+    excitation_u = np.random.uniform(low=-0.1, high=0.1, size=(T,1))
+    #np.random.normal(size=T).reshape((T, 1)) #np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. )
     ## Initialize DeePC object with excitation data np.random.normal(size=T).reshape((T, 1))
     #np.random.seed(10)
-    print('Start data collection for off-line Hankel.')
-    data = sys.apply_input(u = np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. )) #, noise_std=0) #np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. )
+
+    if Use_offline_data == True:
+        filename = "Offline_data.npz" ## File type to be decided
+        if(not os.path.exists("Offline_Data")):
+            os.mkdir("Offline_Data")
+# if(test):
+#     os.remove("Saved_Hankels")
+        if(os.path.exists("Offline_Data/"+filename)):
+    ##### Load
+            Offline_data = np.load("Offline_Data/"+filename)
+            Offline_u = Offline_data['u']
+            Offline_y = Offline_data['y']
+            if  Offline_u.shape[0] != T_tr:
+                os.remove("Offline_Data/"+filename)
+            assert Offline_u.shape[0] == T_tr, "Wrong offline data length. Rerun the code to generate new data."
+            print('Offline data are loaded.')
+            data = Data(u = Offline_u, y = Offline_y)
+            
+        else:
+            print('Start data collection for off-line Hankel and save data.')
+            data = sys.apply_input(u = excitation_u, noise_std=0) #, noise_std=0) #np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. )
+            np.savez("Offline_Data/"+filename, u=data.u, y=data.y)
+            print("Offline data is saved.")
+    else:
+        print('Start data collection for off-line Hankel.')
+        data = sys.apply_input(u = excitation_u, noise_std=0) #, noise_std=0) #np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. )
+        
     #data = sys.apply_input(u = np.random.uniform(-3,3,T).reshape((T, 1)), noise_std=0)
     deepc = DeePC(data, Tini = T_INI, horizon = HORIZON)
     print('Finish data collection and off-line Hankel is ready.')
@@ -140,7 +152,8 @@ for T in T_list:
             build_constraints = constraints_callback,
             lambda_g = LAMBDA_G_REGULARIZER,
             lambda_y = LAMBDA_Y_REGULARIZER,
-            lambda_u = LAMBDA_U_REGULARIZER)
+            lambda_u = LAMBDA_U_REGULARIZER,
+            lambda_proj = LAMBDA_PROJ_REGULARIZER)
         
     for k in range(EXPERIMENT_HORIZON//s):
         
@@ -151,7 +164,7 @@ for T in T_list:
             Uo, info = deepc.solve(data_ini = data_ini, warm_start=True)
         
         # Apply optimal control input for one step
-        _ = sys.apply_input(u = Uo[:s, :], noise_std=1e-1)
+        _ = sys.apply_input(u = Uo[:s, :], noise_std=0)
         
         # Fetch last T_INI samples
         data_ini = sys.get_last_n_samples(T_INI)

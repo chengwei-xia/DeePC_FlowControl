@@ -175,7 +175,7 @@ class FlowSystem(object):
             #print(u[k][0])
             #print(type(u[k]))
             start_time = time.perf_counter()
-            y, reward, terminated, info = self.env.step(np.array([u[k][0],u[k][0]]))
+            y, reward, terminated, info = self.env.step(np.array([u[k][0],-u[k][0]]))
             end_time = time.perf_counter()
             print('One step takes :% s' % ((end_time - start_time)))
             #print(f'Simulation one step takes {end_time - start_time} ms.')
@@ -186,7 +186,7 @@ class FlowSystem(object):
             
             u_run = np.vstack([u_run, u[k]]) if u_run is not None else u[k] # Fill the buffer for single run
             y_run = np.vstack([y_run, y]) if y_run is not None else y
-            print(f'Run simulation for the {k} th step.')
+            print(f'Run simulation for the {k+1} th step.')
             print(f'The inputs are {u[k]} and outputs are {y}.')
             
         self.u = np.vstack([self.u, u_run]) if self.u is not None else u_run # Fill the buffer for all data
