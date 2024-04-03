@@ -5,8 +5,9 @@ import numpy as np
 import math
 
 import sys
-sys.path.append('/home/issay/UROP/DPC_Flow/Utils')
-sys.path.append('/home/issay/UROP/DPC_Flow/Environment')
+
+sys.path.append('../Environment')
+sys.path.append('../Environment/mesh')
 
 # Solves FE problem (sets BCs,
 # There are three variational problems to be defined, one for each step in the IPCS scheme
@@ -20,7 +21,7 @@ class FlowSolver(object):
         rho = Constant(flow_params['rho'])            # density
 
         mesh_file = geometry_params['mesh']
-
+        #print(mesh_file,'mesh file')
         # Load mesh with markers
         mesh = Mesh()
         comm = mesh.mpi_comm()
@@ -51,7 +52,7 @@ class FlowSolver(object):
         for path, func, name in zip(('u_init', 'p_init'), (u_n, p_n), ('u0', 'p0')):
             if path in flow_params:
                 comm = mesh.mpi_comm()
-
+                #print(flow_params[path],'flow path')
                 XDMFFile(comm, flow_params[path]).read_checkpoint(func, name, 0)
                 # assert func.vector().norm('l2') > 0
 

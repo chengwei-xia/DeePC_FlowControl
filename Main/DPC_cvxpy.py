@@ -5,10 +5,16 @@ import numpy as np
 import cvxpy as cp
 from typing import Tuple, Callable, List, Optional, Union, Dict
 from scipy.linalg import hankel, block_diag
- 
+
+import os
+import sys
+cwd = os.getcwd()
+sys.path.append(cwd + "../Utils/")
+sys.path.append(cwd + "../Environment/")
+
 from cvxpy.expressions.expression import Expression
 from cvxpy.constraints.constraint import Constraint
-from pydeepc.utils import (
+from Utils.utils import (
     Data,
     split_data,
     low_rank_matrix_approximation,
@@ -188,8 +194,8 @@ class DeePC(object):
             constraints.append(cp.norm(slack_u, 2) <= DeePC._SMALL_NUMBER)
 
         # Reshape u and y to Tf * dim_u and Tf * dim_y
-        u = cp.reshape(u, (self.horizon, self.M))
-        y = cp.reshape(y, (self.horizon, self.P))
+        u = cp.reshape(u, (self.horizon, self.M),'C')
+        y = cp.reshape(y, (self.horizon, self.P),'C')
 
         _constraints = build_constraints(u, y) if build_constraints is not None else (None, None)
 

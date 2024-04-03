@@ -5,18 +5,30 @@ Environment seen by the RL agent. It is the main class of the repo.
 
 import sys
 import os
-cwd = os.getcwd()
-sys.path.append(cwd + "/../Simulation/")
 
-from dolfinx import Expression, File, plot
+cwd = os.getcwd()
+
+sys.path.append('../Environment')
+sys.path.append('../Environment/mesh')
+
+# Get the current file's directory
+#current_directory = os.path.dirname(os.getcwd())
+ 
+# Navigate to the 'Environment' and 'Mesh' directories from the current directory
+#environment_path = os.path.abspath(os.path.join(current_directory, '..', 'Environment'))
+#mesh_path = os.path.abspath(os.path.join(current_directory, '..', 'Environment', 'mesh'))
+#sys.path.append(environment_path)
+#sys.path.append(mesh_path)
+
+from dolfin import Expression, File, plot
 from probes import PenetratedDragProbeANN, PenetratedLiftProbeANN, PressureProbeANN, VelocityProbeANN, RecirculationAreaProbe
 from generate_msh import generate_mesh
 from flow_solver import FlowSolver
 from msh_convert import convert
-from dolfinx import *
+from dolfin import *
 from distutils.dir_util import copy_tree
 import numpy as np
-from collections import deques
+from collections import deque
 import matplotlib.pyplot as plt
 
 import time
@@ -33,7 +45,7 @@ import copy
 import subprocess
 import scipy.signal as sgn
 import io
-import pickle5 as pickle
+import pickle as pickle
 
 
 class RingBuffer():
@@ -55,7 +67,7 @@ class RingBuffer():
 
 
 # @printidc()
-class Env2DCylinderModified(gym.Env):
+class Env2DCylinder(gym.Env):
     """Environment for 2D flow simulation around a cylinder."""
 
     def __init__(self, path_root, geometry_params, flow_params, solver_params, output_params,
@@ -221,14 +233,14 @@ class Env2DCylinderModified(gym.Env):
                 print("Load initial flow state")
 
             # Load initial fields
-            self.flow_params['u_init'] = 'mesh/u_init.xdmf'
-            self.flow_params['p_init'] = 'mesh/p_init.xdmf'
+            self.flow_params['u_init'] = '../Environment/mesh/u_init.xdmf'
+            self.flow_params['p_init'] = '../Environment/mesh/p_init.xdmf'
 
             if self.verbose > 0:
                 print("Load buffer history")
-
+            print(os.getcwd())
             # Load ring buffers
-            with open('mesh/dict_history_parameters.pkl', 'rb') as f:
+            with open('../Environment/mesh/dict_history_parameters.pkl', 'rb') as f:
                 self.history_parameters = pickle.load(f)
 
             # Check everything is good to go
@@ -1202,10 +1214,14 @@ class Env2DCylinderModified(gym.Env):
         elif measure_type == 'pressure':
             y = None
             for probe in range(len(self.output_params["locations"])):
-                if self.output_params["probe_type"] == 'pressure':
-                    pressure = self.history_parameters["probe_{}".format(probe)].get()[-n:]
-                    pressure = pressure.reshape((-1,1))
-                y = np.vstack([y, pressure]) if y is not None else pressure
+                pressure = self.history_parameters["probe_{}".format(probe)].get()[-n:]
+                pressure = pressure.reshape((-1,1))
+                y = np.hstack([y, pressure]) if y is not None else pressure
+                print(y.shape,'y')
+            if (self.output_params['single_input'] == True):
+                probe_loc_mid = int(len(self.output_params["locations"])/2)
+                y = np.mean(y[:,:probe_loc_mid],axis=1,keepdims=True) - np.mean(y[:,-probe_loc_mid:],axis=1,keepdims=True)
+                print(y.shape,'single_y')
         else:
             assert('Unknown type of measurements.')
             
@@ -1213,20 +1229,24 @@ class Env2DCylinderModified(gym.Env):
         
         return u, y
     
-    def read_buffer_all(self, measure_type):
+    def read_buffer_all(self):
         
         # Read last n data from the buffer
-        if measure_type == 'drag':
+        if self.output_params["probe_type"] == 'drag':
             y = self.history_parameters["drag"].get()
-        elif measure_type == 'lift':
+        elif self.output_params["probe_type"] == 'lift':
             y = self.history_parameters["lift"].get()
-        elif measure_type == 'pressure':
+        elif self.output_params["probe_type"] == 'pressure':
             y = None
             for probe in range(len(self.output_params["locations"])):
-                if self.output_params["probe_type"] == 'pressure':
-                    pressure = self.history_parameters["probe_{}".format(probe)].get()
-                    pressure = pressure.reshape((-1,1))
-                y = np.vstack([y, pressure]) if y is not None else pressure
+                pressure = self.history_parameters["probe_{}".format(probe)].get()
+                pressure = pressure.reshape((-1,1))
+                y = np.hstack([y, pressure]) if y is not None else pressure
+                print(y.shape,'y')
+            if (self.output_params['single_input'] == True):
+                probe_loc_mid = int(len(self.output_params["locations"])/2)
+                y = np.mean(y[:,:probe_loc_mid],axis=1,keepdims=True) - np.mean(y[:,-probe_loc_mid:],axis=1,keepdims=True)
+                print(y.shape,'single_y')
         else:
             assert('Unknown type of measurements.')
             

@@ -4,6 +4,7 @@ from typing import Optional
 from Utils.utils import Data
 import gym
 from Environment.env import resume_env, nb_actuations
+import time
 
 class System(object):
     """
@@ -171,8 +172,13 @@ class FlowSystem(object):
         
         for k in range(T):
             
-            y, reward, terminated, truncated, info = self.env.step(u[k])
-
+            #print(u[k][0])
+            #print(type(u[k]))
+            start_time = time.perf_counter()
+            y, reward, terminated, info = self.env.step(np.array([u[k][0],u[k][0]]))
+            end_time = time.perf_counter()
+            print('One step takes :% s' % ((end_time - start_time)))
+            #print(f'Simulation one step takes {end_time - start_time} ms.')
             #if terminated or truncated:
             #    y, info = self.env.reset()
 
@@ -180,6 +186,8 @@ class FlowSystem(object):
             
             u_run = np.vstack([u_run, u[k]]) if u_run is not None else u[k] # Fill the buffer for single run
             y_run = np.vstack([y_run, y]) if y_run is not None else y
+            print(f'Run simulation for the {k} th step.')
+            print(f'The inputs are {u[k]} and outputs are {y}.')
             
         self.u = np.vstack([self.u, u_run]) if self.u is not None else u_run # Fill the buffer for all data
         self.y = np.vstack([self.y, y_run]) if self.y is not None else y_run
@@ -191,24 +199,25 @@ class FlowSystem(object):
         Returns the last n samples
         :param n: integer value
         """
-        measure_type = 'drag'
-        u, y = self.env.read_buffer_n(measure_type=measure_type, n=n)
         
-        return Data(u,y)
+        assert self.u.shape[0] >= n, 'Not enough samples are available'
+        return Data(self.u[-n:], self.y[-n:])
+
 
     def get_all_samples(self) -> Data:
         """
         Returns all samples from the flow system
         """
-        measure_type = 'drag'
-        u, y = self.env.read_buffer_all(measure_type=measure_type)
-        return Data(u,y)
+        #measure_type = 'drag'
+        #u, y = self.env.read_buffer_all()
+        
+        return Data(self.u,self.y)
 
     def reset(self, data_ini: Optional[Data] = None, x0: Optional[np.ndarray] = None):
         """
         Reset initial state and collected data
         """
-        self.env.reset()
+        x0 = self.env.reset()
         
         self.u = None if data_ini is None else data_ini.u
         self.y = None if data_ini is None else data_ini.y

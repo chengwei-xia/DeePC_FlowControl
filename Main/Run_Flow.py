@@ -16,16 +16,16 @@ import csv
 
 import sys
 cwd = os.getcwd()
-sys.path.append(cwd + "/../Utils/")
-sys.path.append(cwd + "/../Environment/")
+sys.path.append("..")
+sys.path.append(cwd + "/../Environment")
 # sys.path.append('/home/issay/UROP/DPC_Flow/Utils')
 # sys.path.append('/home/issay/UROP/DPC_Flow/Environment')
 # sys.path.append('/home/issay/UROP/DPC_Flow/mesh')
 
-from GetHankels import Hankelbuilder,GetHankels
+from Utils.GetHankels import Hankelbuilder,GetHankels
 #from DPC_Controller import DPC_Controller
 #from env import resume_env, nb_actuations, simulation_duration
-from SaveResults import save_pred
+from Utils.SaveResults import save_pred
 
 # Copied from PyDeePC
 import scipy.signal as scipysig
@@ -35,8 +35,9 @@ import matplotlib.pyplot as plt
 from typing import List
 from cvxpy.expressions.expression import Expression
 from cvxpy.constraints.constraint import Constraint
-from DPC_cvxpy import DeePC
+
 from Utils.utils import Data
+from DPC_cvxpy import DeePC
 from Build_sys import System, GymSystem, FlowSystem
 
 from Environment.env import resume_env, nb_actuations
@@ -63,9 +64,9 @@ def constraints_callback(u: cp.Variable, y: cp.Variable) -> List[Constraint]:
 
 s = 1                       # How many steps to apply predicted control in receding horizon, usually apply only one step
 T_INI = 2                  # Size of the initial set of data
-T_tr = 100
+T_tr = 10
 T_list = [T_tr]              # Number of data points used to estimate the system
-HORIZON = 10               # Horizon length
+HORIZON = 2               # Horizon length
 LAMBDA_G_REGULARIZER = 0   # Regularization on g (see DeePC paper, eq. 8)
 LAMBDA_Y_REGULARIZER = 0  # Regularization on sigmay (see DeePC paper, eq. 8)
 LAMBDA_U_REGULARIZER = 8   # Regularization on sigmau
@@ -103,6 +104,7 @@ ytr = np.zeros([dim_y,num_action])
 # Simulate for different values of T
 
 for T in T_list:
+    
     print(f'Simulating with {T} initial samples...')
 
     sys.reset()
@@ -110,14 +112,16 @@ for T in T_list:
     
     ## Initialize DeePC object with excitation data np.random.normal(size=T).reshape((T, 1))
     #np.random.seed(10)
-    
+    print('Start data collection for off-line Hankel.')
     data = sys.apply_input(u = np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. )) #, noise_std=0) #np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. )
     #data = sys.apply_input(u = np.random.uniform(-3,3,T).reshape((T, 1)), noise_std=0)
     deepc = DeePC(data, Tini = T_INI, horizon = HORIZON)
+    print('Finish data collection and off-line Hankel is ready.')
     
     ## Create initial data
     data_ini = Data(u = np.zeros((T_INI, dim_u)), y = np.zeros((T_INI, dim_y)))
-    sys.reset(data_ini = data_ini)
+    
+    sys.reset(data_ini=data_ini)
    # Uini, Yini = np.transpose(data_ini.u[:T_INI]), np.transpose(data_ini.y[:T_INI])
 
     ## Build DeePC problem

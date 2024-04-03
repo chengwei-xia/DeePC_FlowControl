@@ -15,7 +15,7 @@ from probe_positions import probe_positions
 from dolfin import Expression
 from gym.wrappers.time_limit import TimeLimit
 
-from stable_baselines3.common.monitor import Monitor
+
 
 nb_actuations = 400 # Number of actions (NN actuations) taken per episode (Number of action intervals)
 
@@ -24,22 +24,22 @@ def resume_env(plot=False,  # To plot results (Field, controls, lift, drag, rec 
                dump_debug=500,  # If not False, output step info of ep,step,rec_area,L,D,jets Q* to saved_models/debug.csv, every 'dump_debug' steps
                dump_CL=500,  # If not False, output step info of ep,step,rec_area,L,D,jets Q* to command line, every 'dump_CL' steps
                remesh=False,
-               random_start=True,
+               random_start=False,
                single_run=False,
                horizon=nb_actuations,
                n_env=1):
+    
 
-    def _init():
 
         # ---------------------------------------------------------------------------------
 
         simulation_duration = 200  # In non-dimensional time unit
         dt = 0.004
-        single_input = False
+        single_input = True
         single_output = False
-        include_actions = True
+        include_actions = False
 
-        root = 'mesh/turek_2d'  # Root of geometry file path
+        root = '../Environment/mesh/turek_2d'  # Root of geometry file path
         if (not os.path.exists('mesh')):
             os.mkdir('mesh')
 
@@ -166,7 +166,7 @@ def resume_env(plot=False,  # To plot results (Field, controls, lift, drag, rec 
         simu_name = '_'.join([simu_name, next_param])
 
         # Pass parameters to the Environment class
-        env_2d_cylinder = Monitor(TimeLimit(Env2DCylinderModified(path_root=root,
+        env_2d_cylinder = Env2DCylinder(path_root=root,
                                                 geometry_params=geometry_params,
                                                 flow_params=flow_params,
                                                 solver_params=solver_params,
@@ -177,9 +177,9 @@ def resume_env(plot=False,  # To plot results (Field, controls, lift, drag, rec 
                                                 verbose=verbose,
                                                 reward_function=reward_function,
                                                 number_steps_execution=number_steps_execution,
-                                                simu_name=simu_name), max_episode_steps = horizon))
+                                                simu_name=simu_name)
+        
+        
 
         return env_2d_cylinder
 
-
-    return _init  # resume_env() returns instance of Environment object
