@@ -67,15 +67,16 @@ T_INI = 50                  # Size of the initial set of data
 T_tr = 400
 T_list = [T_tr]              # Number of data points used to estimate the system
 HORIZON = 50               # Horizon length
-LAMBDA_G_REGULARIZER = 0   # Regularization on g (see DeePC paper, eq. 8)
+LAMBDA_G_REGULARIZER = 10   # Regularization on g (see DeePC paper, eq. 8)
 LAMBDA_Y_REGULARIZER = 10  # Regularization on sigmay (see DeePC paper, eq. 8)
-LAMBDA_U_REGULARIZER = 0   # Regularization on sigmau
+LAMBDA_U_REGULARIZER = 10   # Regularization on sigmau
 LAMBDA_PROJ_REGULARIZER = 0
-EXPERIMENT_HORIZON = 50    # Total number of steps
+EXPERIMENT_HORIZON = 80    # Total number of steps
 dim_u = 1 # The number of control actions, e.g. only 1 mass flow rate is needed for jets
 dim_y = 1 # The number of measurements, e.g. 64 sensors for pressure or 32 for antisymmetric pressure measurements
 num_g = T_tr-T_INI-HORIZON+1 # Dimension of g or the width of final Hankel matrix
 
+folder_data = "Offline_Data_" + str(T_tr)
 cano_qp = True
 Use_offline_data = True
 
@@ -101,17 +102,17 @@ for T in T_list:
 
     if Use_offline_data == True:
         filename = "Offline_data.npz" ## File type to be decided
-        if(not os.path.exists("Offline_Data")):
-            os.mkdir("Offline_Data")
+        if(not os.path.exists(folder_data)):
+            os.mkdir(folder_data)
 # if(test):
 #     os.remove("Saved_Hankels")
-        if(os.path.exists("Offline_Data/"+filename)):
+        if(os.path.exists(folder_data+"/"+filename)):
     ##### Load
-            Offline_data = np.load("Offline_Data/"+filename)
+            Offline_data = np.load(folder_data+"/"+filename)
             Offline_u = Offline_data['u']
             Offline_y = Offline_data['y']
             if  Offline_u.shape[0] != T_tr:
-                os.remove("Offline_Data/"+filename)
+                os.remove(folder_data+"/"+filename)
             assert Offline_u.shape[0] == T_tr, "Wrong offline data length. Rerun the code to generate new data."
             print('Offline data are loaded.')
             data = Data(u = Offline_u, y = Offline_y)
@@ -119,7 +120,7 @@ for T in T_list:
         else:
             print('Start data collection for off-line Hankel and save data.')
             data = sys.apply_input(u = excitation_u, noise_std=0) #, noise_std=0) #np.sin(np.linspace(1,T,T).reshape((T, 1)) * np.pi / 180. )
-            np.savez("Offline_Data/"+filename, u=data.u, y=data.y)
+            np.savez(folder_data+"/"+filename, u=data.u, y=data.y)
             print("Offline data is saved.")
     else:
         print('Start data collection for off-line Hankel.')

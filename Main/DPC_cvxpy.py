@@ -312,7 +312,7 @@ class DeePC(object):
         Su = lambda_u * np.eye(self.M * self.Tini)
         Sy = lambda_y * np.eye(self.P * self.Tini)
         R = 0*np.eye(self.M * self.horizon) #np.zeros([self.M * self.horizon,self.M * self.horizon]) #0.001*np.eye(self.M * self.horizon)
-        Q = 100*np.eye(self.P * self.horizon)
+        Q = 1e5*np.eye(self.P * self.horizon)
         
         
         # Formulate matrices loss function

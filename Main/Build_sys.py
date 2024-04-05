@@ -58,6 +58,7 @@ class System(object):
         Returns all samples
         """
         return Data(self.u, self.y)
+    
 
     def reset(self, data_ini: Optional[Data] = None, x0: Optional[np.ndarray] = None):
         """
@@ -150,7 +151,7 @@ class FlowSystem(object):
         :param env: a gym system, e.g. inverted pendulum
         :param x0: initial state
         """
-        self.env = resume_env(plot=False, dump_CL=False, dump_debug=10, n_env=1)
+        self.env = resume_env(plot=False, dump_CL=2500, dump_debug=10, n_env=1)
         # assert x0 is None or sys.A.shape[0] == len(x0), 'Invalid initial condition'
         # self.env = env
         # self.x0 = x0 if x0 is not None else np.zeros(sys.A.shape[0])
@@ -186,12 +187,17 @@ class FlowSystem(object):
             
             u_run = np.vstack([u_run, u[k]]) if u_run is not None else u[k] # Fill the buffer for single run
             y_run = np.vstack([y_run, y]) if y_run is not None else y
+            #if k == 0:
+                #du = u[0] - self.u[-1] if self.u is not None else 0*u[0]
+            #else:
+                #du = np.vstack([du,(u[k]-u[k-1])])
             print(f'Run simulation for the {k+1} th step.')
             print(f'The inputs are {u[k]} and outputs are {y}.')
             
         self.u = np.vstack([self.u, u_run]) if self.u is not None else u_run # Fill the buffer for all data
         self.y = np.vstack([self.y, y_run]) if self.y is not None else y_run
-            
+        
+        
         return Data(u_run, y_run)
 
     def get_last_n_samples(self, n: int) -> Data:
@@ -212,7 +218,7 @@ class FlowSystem(object):
         #u, y = self.env.read_buffer_all()
         
         return Data(self.u,self.y)
-
+    
     def reset(self, data_ini: Optional[Data] = None, x0: Optional[np.ndarray] = None):
         """
         Reset initial state and collected data
