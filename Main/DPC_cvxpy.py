@@ -311,15 +311,15 @@ class DeePC(object):
         G_g = lambda_g * np.eye(self.num_g)
         Su = lambda_u * np.eye(self.M * self.Tini)
         Sy = lambda_y * np.eye(self.P * self.Tini)
-        Q = np.zeros([self.M * self.horizon,self.M * self.horizon]) #0.001*np.eye(self.M * self.horizon)
-        R = 5*np.eye(self.P * self.horizon)
+        R = 0*np.eye(self.M * self.horizon) #np.zeros([self.M * self.horizon,self.M * self.horizon]) #0.001*np.eye(self.M * self.horizon)
+        Q = 100*np.eye(self.P * self.horizon)
         
         
-        # Formulate loss function
-        P = block_diag(G_g,Su,Sy,Q,R)
+        # Formulate matrices loss function
+        P = block_diag(G_g,Su,Sy,R,Q)
         eig_P = np.linalg.eigvals(P)
         assert np.all(eig_P) >= 0,  "Quadratic matrix needs to be positive semidefinite."            
-        q = np.hstack([np.zeros(self.x_dim - self.P * self.horizon), -np.dot(yref*np.ones(self.P * self.horizon),R)])
+        q = np.hstack([np.zeros(self.x_dim - self.P * self.horizon), -np.dot(yref*np.ones(self.P * self.horizon),Q)])
         
         # TODO: set up P with Kronecker product
         

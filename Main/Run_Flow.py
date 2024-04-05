@@ -58,32 +58,31 @@ def constraints_callback(u: cp.Variable, y: cp.Variable) -> List[Constraint]:
     horizon, M, P = u.shape[0], u.shape[1], y.shape[1]
     # Define a list of input/output constraints
     # no real constraints on y, input should be between -1 and 1
-    return [u >= 0, u <= 0.1]
+    return [u >= -0.1, u <= 0.1]
 
 ###### Setup parameters ###### 
 
 s = 1                       # How many steps to apply predicted control in receding horizon, usually apply only one step
-T_INI = 10                  # Size of the initial set of data
-T_tr = 100
+T_INI = 50                  # Size of the initial set of data
+T_tr = 400
 T_list = [T_tr]              # Number of data points used to estimate the system
-HORIZON = 10               # Horizon length
+HORIZON = 50               # Horizon length
 LAMBDA_G_REGULARIZER = 0   # Regularization on g (see DeePC paper, eq. 8)
-LAMBDA_Y_REGULARIZER = 0  # Regularization on sigmay (see DeePC paper, eq. 8)
+LAMBDA_Y_REGULARIZER = 10  # Regularization on sigmay (see DeePC paper, eq. 8)
 LAMBDA_U_REGULARIZER = 0   # Regularization on sigmau
 LAMBDA_PROJ_REGULARIZER = 0
-EXPERIMENT_HORIZON = 100    # Total number of steps
+EXPERIMENT_HORIZON = 50    # Total number of steps
 dim_u = 1 # The number of control actions, e.g. only 1 mass flow rate is needed for jets
 dim_y = 1 # The number of measurements, e.g. 64 sensors for pressure or 32 for antisymmetric pressure measurements
 num_g = T_tr-T_INI-HORIZON+1 # Dimension of g or the width of final Hankel matrix
 
-cano_qp = False
+cano_qp = True
 Use_offline_data = True
 
 sys = FlowSystem()
 
 fig, ax = plt.subplots(1,2)
 plt.margins(x=0, y=0)
-
 
 ##### Data Collection (Parallelization needs development) ######
 
@@ -143,9 +142,9 @@ for T in T_list:
             lambda_g = LAMBDA_G_REGULARIZER,
             lambda_y = LAMBDA_Y_REGULARIZER,
             lambda_u = LAMBDA_U_REGULARIZER,
-            u_low    = -1.0,
-            u_up     = 1.0,
-            yref     = 1.0)
+            u_low    = -0.1,
+            u_up     = 0.1,
+            yref     = 0.0)
     elif not cano_qp:
         deepc.opt_setup(
             build_loss = loss_callback,
@@ -157,11 +156,14 @@ for T in T_list:
         
     for k in range(EXPERIMENT_HORIZON//s):
         
+        start_time = time.perf_counter()
         ## Run DeePC control to obtain the first set of actions
         if cano_qp:
             Uo, Yo = deepc.qp_solve(data_ini = data_ini, warm_start=True)
         elif not cano_qp:
             Uo, info = deepc.solve(data_ini = data_ini, warm_start=True)
+        end_time = time.perf_counter()
+        print('One optimization step takes :% s' % ((end_time - start_time)))
         
         # Apply optimal control input for one step
         _ = sys.apply_input(u = Uo[:s, :], noise_std=0)
@@ -179,8 +181,8 @@ for T in T_list:
     #sys.close()
     print("Finish DeePC.")
 
-ax[0].set_ylim(0, 1.5)
-ax[1].set_ylim(-1.2, 1.2)
+ax[0].set_ylim(-0.5, 0.5)
+ax[1].set_ylim(-0.1, 0.1)
 ax[0].set_xlabel('t')
 ax[0].set_ylabel('y')
 ax[0].grid()

@@ -177,7 +177,7 @@ class FlowSystem(object):
             start_time = time.perf_counter()
             y, reward, terminated, info = self.env.step(np.array([u[k][0],-u[k][0]]))
             end_time = time.perf_counter()
-            print('One step takes :% s' % ((end_time - start_time)))
+            print('One simulation step takes :% s' % ((end_time - start_time)))
             #print(f'Simulation one step takes {end_time - start_time} ms.')
             #if terminated or truncated:
             #    y, info = self.env.reset()
