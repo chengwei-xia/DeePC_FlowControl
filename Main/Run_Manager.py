@@ -63,26 +63,31 @@ def constraints_callback(u: cp.Variable, y: cp.Variable) -> List[Constraint]:
 ###### Setup parameters ###### 
 
 
-LAMBDA_G_REGULARIZER = np.array([1,10,5])   # Regularization on g (see DeePC paper, eq. 8)
-LAMBDA_Y_REGULARIZER = np.array([500,800])  # Regularization on sigmay (see DeePC paper, eq. 8)
-LAMBDA_U_REGULARIZER = np.array([1,5,20,50])   # Regularization on sigmau
+LAMBDA_G_REGULARIZER = np.array([0.1])   # Regularization on g (see DeePC paper, eq. 8)
+LAMBDA_Y_REGULARIZER = np.array([1500])  # Regularization on sigmay (see DeePC paper, eq. 8)
+LAMBDA_U_REGULARIZER = np.array([5])   # Regularization on sigmau
 LAMBDA_PROJ_REGULARIZER = [1e-4,1e-3,1e-2]
 s = 1                       # How many steps to apply predicted control in receding horizon, usually apply only one step
-EXPERIMENT_HORIZON = 80    # Total number of steps
+EXPERIMENT_HORIZON = 1200    # Total number of steps
 R = 0                      # Weight for R matrix in optimization (uT*R*u)
 Q = 1e5                    # Weight for Q matrix in optimization (yT*Q*y)
+umin = -0.1
+umax = 0.1
+yref = 0
 
-T_INI = 150                 # Size of the initial set of data
+T_INI = 150                # Size of the initial set of data
 T_tr = 1000
 T_list = [T_tr]              # Number of data points used to estimate the system
-HORIZON = 150              # Horizon length
+HORIZON = 150             # Horizon length
 dim_u = 1 # The number of control actions, e.g. only 1 mass flow rate is needed for jets
 dim_y = 1 # The number of measurements, e.g. 64 sensors for pressure or 32 for antisymmetric pressure measurements
+Hankel_up_steps = 50 # The number of steps after which we update online Hankel matrices
 
 folder_data = "Offline_Data_" + str(T_tr)
 
 cano_qp = True
 Use_offline_data = True
+Online_hankel = True
 
 
 def DeePC_Run(data_path, opt_params, hankel_params, selectors):
@@ -99,6 +104,9 @@ def DeePC_Run(data_path, opt_params, hankel_params, selectors):
     EXPERIMENT_HORIZON = opt_params['control_horizon'] 
     Weight_u = opt_params['R']
     Weight_y = opt_params['Q']
+    umin     = opt_params['umin']
+    umax     = opt_params['umax']
+    yref     = opt_params['yref']
     
     
     ##### Hankel Matrix Variables #####
@@ -108,10 +116,13 @@ def DeePC_Run(data_path, opt_params, hankel_params, selectors):
     dim_u = hankel_params['dim_u']  
     dim_y = hankel_params['dim_y'] 
     num_g = T_tr-T_INI-HORIZON+1 # Dimension of g or the width of final Hankel matrix
+    Hankel_ctr = 0
     
     ##### Selectors #####
     cano_qp = selectors['QP']
     Use_offline_data = selectors['Use_offline_data']
+    Online_hankel = selectors['Online_hankel']
+    
     
     sum_reward = 0
     
@@ -172,9 +183,9 @@ def DeePC_Run(data_path, opt_params, hankel_params, selectors):
             lambda_g = LAMBDA_G_REGULARIZER,
             lambda_y = LAMBDA_Y_REGULARIZER,
             lambda_u = LAMBDA_U_REGULARIZER,
-            u_low    = -0.1,
-            u_up     = 0.1,
-            yref     = 0.0,
+            u_low    = umin,
+            u_up     = umax,
+            yref     = yref,
             W_R      = Weight_u,
             W_Q      = Weight_y)
     elif not cano_qp:
@@ -188,6 +199,7 @@ def DeePC_Run(data_path, opt_params, hankel_params, selectors):
         
     for k in range(EXPERIMENT_HORIZON//s):
         
+
         start_time = time.perf_counter()
         ## Run DeePC control to obtain the first set of actions
         if cano_qp:
@@ -200,6 +212,15 @@ def DeePC_Run(data_path, opt_params, hankel_params, selectors):
         # Apply optimal control input for one step
         _ = sys.apply_input(u = Uo[:s, :], noise_std=0)
         
+        # Update hankel matrices
+        if Online_hankel == True and k*s>=T:
+            
+            if Hankel_ctr%Hankel_up_steps==0:
+                new_data = sys.get_last_n_samples(T)
+                deepc.update_Hankel(data=new_data)
+                Hankel_times = Hankel_ctr/Hankel_up_steps+1
+                print(f'Update online Hankel for the {Hankel_times} time.')
+            Hankel_ctr +=1
         #sum_reward += reward
         # Fetch last T_INI samples
         data_ini = sys.get_last_n_samples(T_INI)
@@ -228,6 +249,7 @@ hankel_params = {'T':T_tr,
 
 selectors = {'QP':cano_qp,
              'Use_offline_data':Use_offline_data,
+             'Online_hankel':Online_hankel
              }
 
 
@@ -243,7 +265,10 @@ for i in range(len(LAMBDA_G_REGULARIZER)):
                           'control_applied': s,
                           'control_horizon': EXPERIMENT_HORIZON,
                           'R': R,
-                          'Q': Q
+                          'Q': Q,
+                          'umin':umin,
+                          'umax':umax,
+                          'yref':yref
                           }
             
             # Run control experiments
@@ -267,9 +292,11 @@ for i in range(len(LAMBDA_G_REGULARIZER)):
             ax[0].set_title('Closed loop - output signal $y_t$')
             ax[1].set_title('Closed loop - control signal $u_t$')
             plt.legend(fancybox=True, shadow=True)
-            plt.savefig(fname = f'T_{T_tr}_Tini_{T_INI}_Tf_{HORIZON}_g_{LAMBDA_G_REGULARIZER[i]}_y_{LAMBDA_Y_REGULARIZER[j]}_u_{LAMBDA_U_REGULARIZER[k]}')
+            fig_name = f'T_{T_tr}_Tini_{T_INI}_Tf_{HORIZON}_g_' + "{:.1f}".format(LAMBDA_G_REGULARIZER[i]).replace('.','p') + '_y_' + "{:.1f}".format(LAMBDA_Y_REGULARIZER[j]).replace('.','p') + '_u_' + "{:.1f}".format(LAMBDA_U_REGULARIZER[k]).replace('.','p')
+            plt.savefig(fname = fig_name)
             plt.show()
             
+            y_mse = np.mean(data.y[-10:,:]**2)
 
 #if test_hankel_params == True:
     #for i in range(len(LAMBDA_G_REGULARIZER)):

@@ -49,6 +49,13 @@ class DeePC(object):
 
         self.optimization_problem = None
 
+    def update_Hankel(self, data: Data):
+        
+        ## Build Hankel matrices
+        utr = np.transpose(data.u)
+        ytr = np.transpose(data.y)
+        self.Up, self.Uf, self.Yp, self.Yf, uini, yini = self.GetHankels(utr,ytr,self.horizon,self.Tini,self.T)
+        
     def update_data(self, data: Data):
         """
         Update Hankel matrices of DeePC. You need to rebuild the optimization problem
@@ -295,7 +302,9 @@ class DeePC(object):
             lambda_proj: float = 0.,
             u_low: float = 0.,
             u_up: float = 0.,
-            yref: float = 0.)-> OptimizationProblem:
+            yref: float = 0.,
+            W_R: float = 0.,
+            W_Q: float = 0.)-> OptimizationProblem:
         """
         Solve QP in DeePC as min (1/2)xTPx + qTx s.t. Ax=b Gx<=h
         For convenience, x is formulated as x = (g,sigmau,sigmay,u,y)' with dimension dim_g + dim_u*Tini + dim_y*Tini + dim_u*Tf + dim_y*Tf
@@ -311,8 +320,8 @@ class DeePC(object):
         G_g = lambda_g * np.eye(self.num_g)
         Su = lambda_u * np.eye(self.M * self.Tini)
         Sy = lambda_y * np.eye(self.P * self.Tini)
-        R = 0*np.eye(self.M * self.horizon) #np.zeros([self.M * self.horizon,self.M * self.horizon]) #0.001*np.eye(self.M * self.horizon)
-        Q = 1e5*np.eye(self.P * self.horizon)
+        R = W_R*np.eye(self.M * self.horizon) #np.zeros([self.M * self.horizon,self.M * self.horizon]) #0.001*np.eye(self.M * self.horizon)
+        Q = W_Q*np.eye(self.P * self.horizon)
         
         
         # Formulate matrices loss function
