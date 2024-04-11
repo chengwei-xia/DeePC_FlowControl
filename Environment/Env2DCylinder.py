@@ -138,6 +138,10 @@ class Env2DCylinder(gym.Env):
             else:
                 self.state_shape = len(self.output_params["locations"])
 
+        elif self.output_params["probe_type"] == 'drag':
+            self.state_shape = 1
+            
+
         elif self.output_params["probe_type"] == 'velocity':
             self.state_shape = 2 * len(self.output_params["locations"])
 
@@ -288,7 +292,7 @@ class Env2DCylinder(gym.Env):
 
         # ------------------------------------------------------------------------
         # Setup probes
-        if self.output_params["probe_type"] == 'pressure':
+        if self.output_params["probe_type"] == 'pressure' or self.output_params["probe_type"] == 'drag':
             self.ann_probes = PressureProbeANN(self.flow, self.output_params['locations'])
             self.ann_probes_ob = PressureProbeANN(self.flow, self.output_params['locations_ob'])
         elif self.output_params["probe_type"] == 'velocity':
@@ -368,7 +372,7 @@ class Env2DCylinder(gym.Env):
             self.drag = self.drag_probe.sample(self.u_, self.p_)
             self.lift = self.lift_probe.sample(self.u_, self.p_)
             self.recirc_area = self.area_probe.sample(self.u_, self.p_)
-
+                
             self.write_history_parameters()
 
         # ----------------------------------------------------------------------
@@ -819,7 +823,7 @@ class Env2DCylinder(gym.Env):
         self.start_class()
 
         # If observations is based on difference of average top and bottom pressures
-        if (self.output_params['single_input'] == True):
+        if (self.output_params['single_input'] == True and not self.output_params["probe_type"] == 'drag'):
             probe_loc_mid = int(len(self.output_params["locations"])/2)
             press_asym = np.mean(np.array(self.probes_values)[:probe_loc_mid]) - np.mean(np.array(self.probes_values)[-probe_loc_mid:]) 
             next_state = np.array(press_asym.reshape(1,))
@@ -833,7 +837,8 @@ class Env2DCylinder(gym.Env):
             #     key = "prev_obs_" + str(n_hist + 1)
             #     press_asym = np.mean(self.history_observations[n_hist][:probe_loc_mid]) - np.mean(self.history_observations[n_hist][-probe_loc_mid:])
             #     next_state.update({key : np.array(press_asym.reshape(1,))})
-        
+        elif self.output_params["probe_type"] == 'drag':
+            next_state = np.array(self.drag).reshape(1,)
         # If observations is based on raw pressure probes    
         else:
             next_state = np.transpose(np.array(self.probes_values))
@@ -948,7 +953,7 @@ class Env2DCylinder(gym.Env):
         wake_ob = np.transpose(np.array(self.probes_values_ob)) # Save the pressure measurements for observation
         
         # If observations is based on difference of average top and bottom pressures
-        if (self.output_params['single_input'] == True):
+        if (self.output_params['single_input'] == True and not self.output_params["probe_type"] == 'drag'):
             probe_loc_mid = int(len(self.output_params["locations"])/2)
             press_asym = np.mean(np.array(self.probes_values)[:probe_loc_mid]) - np.mean(np.array(self.probes_values)[-probe_loc_mid:]) 
             next_state = np.array(press_asym.reshape(1,))
@@ -959,6 +964,9 @@ class Env2DCylinder(gym.Env):
 
                 press_asym = np.mean(self.history_observations[n_hist][:probe_loc_mid]) - np.mean(self.history_observations[n_hist][-probe_loc_mid:])
                 next_state.update({key : np.array(press_asym.reshape(1,))})
+        
+        elif self.output_params["probe_type"] == 'drag':
+            next_state = np.array(self.drag).reshape(1,)
         
         # If observations is based on raw pressure probes    
         else:
@@ -1170,7 +1178,6 @@ class Env2DCylinder(gym.Env):
                     spam_writer.writerow([self.episode_number, self.solver_step, v])
                         
     def save_state(self, next_state):
-
         name = "state.csv"
         if (not os.path.exists("saved_models")):
             os.mkdir("saved_models")
