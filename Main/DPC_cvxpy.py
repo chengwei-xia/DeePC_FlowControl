@@ -8,6 +8,7 @@ from scipy.linalg import hankel, block_diag
 
 import os
 import sys
+import csv
 cwd = os.getcwd()
 sys.path.append(cwd + "../Utils/")
 sys.path.append(cwd + "../Environment/")
@@ -20,7 +21,6 @@ from Utils.utils import (
     low_rank_matrix_approximation,
     OptimizationProblem,
     OptimizationProblemVariables)
-
 
 
 
@@ -430,8 +430,12 @@ class DeePC(object):
             raise Exception('Problem is unbounded')
             
         g = self.x.value[:self.num_g]
+        self.g = g
         u_optimal = (self.Uf @ g).reshape(self.horizon, self.M)
         y_optimal = (self.Yf @ g).reshape(self.horizon, self.P)
 
             
         return u_optimal, y_optimal
+    
+        
+        

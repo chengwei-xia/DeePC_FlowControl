@@ -151,7 +151,7 @@ class FlowSystem(object):
         :param env: a gym system, e.g. inverted pendulum
         :param x0: initial state
         """
-        self.env = resume_env(plot=False, dump_CL=2500, dump_debug=10, n_env=1)
+        self.env = resume_env(plot=False, dump_CL=125, dump_debug=10, dump_vtu=125 ,single_run=True, random_start=False, n_env=1)
         # assert x0 is None or sys.A.shape[0] == len(x0), 'Invalid initial condition'
         # self.env = env
         # self.x0 = x0 if x0 is not None else np.zeros(sys.A.shape[0])
@@ -192,7 +192,7 @@ class FlowSystem(object):
             #else:
                 #du = np.vstack([du,(u[k]-u[k-1])])
             print(f'Run simulation for the {k+1} th step.')
-            print(f'The inputs are {u[k]} and outputs are {y}.')
+            print(f'The actions are {u[k]} and measurements are {y}.')
             
         self.u = np.vstack([self.u, u_run]) if self.u is not None else u_run # Fill the buffer for all data
         self.y = np.vstack([self.y, y_run]) if self.y is not None else y_run

@@ -1,4 +1,6 @@
 import numpy as np
+import os
+import csv
 from typing import NamedTuple, Tuple, Optional, List, Union
 from cvxpy import Expression, Variable, Problem, Parameter
 from cvxpy.constraints.constraint import Constraint
@@ -134,3 +136,19 @@ def low_rank_matrix_approximation(
         X_low += s[i] * np.outer(u[:,i], v[i])
     return X_low
 
+def log_params(info, name):
+    
+    print("Start parameter logging.")
+
+    if (not os.path.exists("logging")):
+        os.mkdir("logging")
+    if (not os.path.exists("logging/" + name)):
+        with open("logging/" + name, "w") as csv_obj:
+            spam_writer = csv.writer(csv_obj, delimiter=";", lineterminator="\n")
+            spam_writer.writerow(["T" ,"Tini" ,"Tf" ,"lambda_u" ,"lambda_y" ,"lambda_g" ,"Q" ,"R" ,"solver" ,"avg_opt_step_time", "total_steps", "mse"])
+            spam_writer.writerow([info['T'], info['Tini'], info['Tf'],info['lambda_u'],info['lambda_y'],info['lambda_g'],info['Q'],info['R'],info['solver'],info['avg_opt_step_time'],info['total_steps'],info['mse']])
+    else:
+        with open("logging/" + name, "a") as csv_state:
+            spam_writer = csv.writer(csv_state, delimiter=";", lineterminator="\n")
+            spam_writer.writerow([info['T'], info['Tini'], info['Tf'],info['lambda_u'],info['lambda_y'],info['lambda_g'],info['Q'],info['R'],info['solver'],info['avg_opt_step_time'],info['total_steps'],info['mse']])
+    print("Finish parameter logging.")
