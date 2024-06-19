@@ -45,7 +45,9 @@ from Build_sys import System, GymSystem, FlowSystem
 
 from Environment.env import resume_env, nb_actuations
 
-import OMADS
+from typing import Callable
+from OMADS import POLL, SEARCH, MADS
+from pybads import BADS
 
 # Define the loss function for DeePC
 def loss_callback(u: cp.Variable, y: cp.Variable) -> Expression:
@@ -103,6 +105,7 @@ cano_qp = True
 Use_offline_data = True
 Online_hankel = False
 MADS = True
+BADS = False
 
 
 def DeePC_Run(data_path, opt_params, hankel_params, selectors):
@@ -282,34 +285,35 @@ def DeePC_Run(data_path, opt_params, hankel_params, selectors):
 
 
 
-def DeePC_MADS_Run(params,*argv):
+def DeePC_MADS_Run(x,*argv):
     
+    cons = argv[0]
     ##### Path Variables #####
     folder_data = "Offline_Data_" + str(T_tr)
     
     ##### Optimization Variables #####
-    LAMBDA_G_REGULARIZER = params[0]  
-    LAMBDA_U_REGULARIZER = params[1]   # Regularization on sigmau
-    LAMBDA_Y_REGULARIZER = params[2]   # Regularization on sigmay (see DeePC paper, eq. 8)
-    MADS_freq            = argv[9]
+    LAMBDA_G_REGULARIZER = x[0]  
+    LAMBDA_U_REGULARIZER = x[1]   # Regularization on sigmau
+    LAMBDA_Y_REGULARIZER = x[2]   # Regularization on sigmay (see DeePC paper, eq. 8)
+    MADS_freq            = cons[9]
 
     LAMBDA_PROJ_REGULARIZER = 0
     s = 1                      # How many steps to apply predicted control in receding horizon, usually apply only one step
-    EXPERIMENT_HORIZON = 100
-    Weight_u = argv[0]
-    Weight_y = params[3]
-    umin     = argv[1]
-    umax     = argv[2]
-    yref     = argv[3]
+    EXPERIMENT_HORIZON = 10
+    Weight_u = cons[0]
+    Weight_y = x[3]
+    umin     = cons[1]
+    umax     = cons[2]
+    yref     = cons[3]
     solver   = cp.OSQP
     
     
     ##### Hankel Matrix Variables #####
-    T = argv[4]
-    T_INI = argv[5]              
-    HORIZON = argv[6]         
-    dim_u = argv[7]
-    dim_y = argv[8]
+    T = cons[4]
+    T_INI = cons[5]              
+    HORIZON = cons[6]         
+    dim_u = cons[7]
+    dim_y = cons[8]
     num_g = T_tr-T_INI-HORIZON+1 # Dimension of g or the width of final Hankel matrix
     Hankel_ctr = 0
     
@@ -412,15 +416,23 @@ def DeePC_MADS_Run(params,*argv):
         # Store U_predict and Y_predict
         U_pred = np.hstack([U_pred,Uo]) if U_pred is not None else Uo
         Y_pred = np.hstack([Y_pred,Yo]) if Y_pred is not None else Yo
-        
-        if (k+1) % HORIZON == 0:
-            data_HORIZON = sys.get_last_n_samples(HORIZON)
-            Y_meas = data_HORIZON.y
-            Y_mse = np.mean((Y_pred-Y_meas)**2)
-            predict_error = np.hstack([predict_error, Y_mse]) if predict_error is not None else Y_mse
+        #print(Y_pred.shape, 'Y_pred shape')
         
         # Apply optimal control input for one step
         _ = sys.apply_input(u = Uo[:s, :], noise_std=0) #Uo[:s, :]
+        
+        # Calculate prediction error as the cost of MADS
+        if (k+1) % MADS_freq == 0:
+            data_HORIZON = sys.get_last_n_samples(MADS_freq)
+            Y_meas = data_HORIZON.y
+            print('Y_meas =', Y_meas)
+            print(Y_meas[:,:].shape,'Y_meas shape')
+            print(Y_pred[:MADS_freq,-MADS_freq].shape, 'Yo shape')
+            Y_mse = np.mean((Y_pred[:MADS_freq,-MADS_freq]-Y_meas[:,:])**2) # Caution: dimension of y
+            print('Y_mse = ', Y_mse)
+            predict_error = np.hstack([predict_error, Y_mse]) if predict_error is not None else Y_mse
+            print(predict_error.shape, 'Pred error shape')
+        
         
         # Update hankel matrices
         if Online_hankel == True and k*s>=T:
@@ -436,8 +448,10 @@ def DeePC_MADS_Run(params,*argv):
         data_ini = sys.get_last_n_samples(T_INI)
         
         print("One action step applied. On action step ", k+1, "out of ", EXPERIMENT_HORIZON//s, ".")
-        
-    return np.sum(predict_error)
+    
+    y = np.sum(predict_error)
+    
+    return y
 
 #### Main code for running ####
 data_path = {'offline_data': folder_data}
@@ -480,24 +494,29 @@ if MADS == True:
     T_f = hankel_params['Tf'] 
     T = hankel_params['T']
     
-    MADS_freq = 10
+    MADS_freq = 5
     
-    eval = {"blackbox": DeePC_MADS_Run, "constants": [R, umin,umax,yref,T,T_ini,T_f,dim_u,dim_y,MADS_freq]}
-    param = {"baseline": [lambda_g_baseline, lambda_u_baseline, lambda_y_baseline, Q_baseline],
-                "lb": [0.1, 0.1, 10, 1e3],
+    x0 = [lambda_g_baseline, lambda_u_baseline, lambda_y_baseline, Q_baseline]
+    cons = [R, umin,umax,yref,T,T_ini,T_f,dim_u,dim_y,MADS_freq]
+    # y = DeePC_MADS_Run(x0,[R, umin,umax,yref,T,T_ini,T_f,dim_u,dim_y,MADS_freq])
+    
+    fun: Callable = DeePC_MADS_Run
+    eval = {"blackbox": fun, "constants": cons}
+    param = {"baseline": x0,
+                "lb": [0, 0, 10, 1e2],
                 "ub": [10, 100, 1000, 1e6],
-                "var_names": ["Tini", "lambda_g","lambda_u","lambda_y","Q"],
-                "scaling": [1, 1, 10, 100],
+                "var_names": ["lambda_g","lambda_u","lambda_y","Q"],
+                "scaling": [1, 1, 100, 1000],
                 "post_dir": "./post"}
     
-    options = {"seed": 0, "budget": 100000, "tol": 1e-3, "display": True}
+    options = {"seed": 0, "budget": 100000, "tol": 1e-3, "display": False, "save_results": True, "save_coordinates": True}
     
     data = {"evaluator": eval, "param": param, "options":options}
     
     out = {}
     # out is a dictionary that will hold output data of the final solution. The out dictionary has three keys: "xmin", "fmin" and "hmin"
     
-    out = OMADS.main(data)
+    out = POLL.main(data)
     
     # print("Start MADS logging.")
     # name = "MADS_logger.csv"
