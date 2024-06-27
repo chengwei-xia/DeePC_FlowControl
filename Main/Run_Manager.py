@@ -70,9 +70,9 @@ def constraints_callback(u: cp.Variable, y: cp.Variable) -> List[Constraint]:
 ###### Setup parameters ###### 
 
 
-LAMBDA_G_REGULARIZER = np.array([1])   # Regularization on g (see DeePC paper, eq. 8)
-LAMBDA_Y_REGULARIZER = np.array([500])  # Regularization on sigmay (see DeePC paper, eq. 8)
-LAMBDA_U_REGULARIZER = np.array([10])   # Regularization on sigmau
+LAMBDA_G_REGULARIZER = np.array([0.125])   # Regularization on g (see DeePC paper, eq. 8)
+LAMBDA_Y_REGULARIZER = np.array([1000])  # Regularization on sigmay (see DeePC paper, eq. 8)
+LAMBDA_U_REGULARIZER = np.array([13.75])   # Regularization on sigmau
 LAMBDA_PROJ_REGULARIZER = [1e-4,1e-3,1e-2]
 s = 1                       # How many steps to apply predicted control in receding horizon, usually apply only one step
 EXPERIMENT_HORIZON = 400   # Total number of steps
@@ -104,7 +104,7 @@ else:
 cano_qp = True
 Use_offline_data = True
 Online_hankel = False
-MADS = True
+MADS = False
 BADS = False
 
 
@@ -141,7 +141,6 @@ def DeePC_Run(data_path, opt_params, hankel_params, selectors):
     cano_qp = selectors['QP']
     Use_offline_data = selectors['Use_offline_data']
     Online_hankel = selectors['Online_hankel']
-    Param_tune    = selectors['MADS']
     
     U_pred = None
     Y_pred = None
@@ -301,7 +300,7 @@ def DeePC_MADS_Run(x,*argv):
     s = 1                      # How many steps to apply predicted control in receding horizon, usually apply only one step
     EXPERIMENT_HORIZON = 10
     Weight_u = cons[0]
-    Weight_y = x[3]
+    Weight_y = cons[10]
     umin     = cons[1]
     umax     = cons[2]
     yref     = cons[3]
@@ -451,6 +450,22 @@ def DeePC_MADS_Run(x,*argv):
     
     y = np.sum(predict_error)
     
+    print("Start MADS logging.")
+    name = "MADS_logger.csv"
+
+    if (not os.path.exists("MADS_logging")):
+        os.mkdir("MADS_logging")
+    if (not os.path.exists("MADS_logging/" + name)):
+        with open("MADS_logging/" + name, "w") as csv_obj:
+            spam_writer = csv.writer(csv_obj, delimiter=";", lineterminator="\n")
+            spam_writer.writerow(["T" ,"Tini" ,"Tf" ,"lambda_u" ,"lambda_y" ,"lambda_g" ,"Q" ,"R" ,"solver" , "pred_error"])
+            spam_writer.writerow([T, T_INI, HORIZON, LAMBDA_U_REGULARIZER, LAMBDA_Y_REGULARIZER, LAMBDA_G_REGULARIZER,Weight_y,Weight_u,solver,y])
+    else:
+        with open("MADS_logging/" + name, "a") as csv_state:
+            spam_writer = csv.writer(csv_state, delimiter=";", lineterminator="\n")
+            spam_writer.writerow([T, T_INI, HORIZON, LAMBDA_U_REGULARIZER, LAMBDA_Y_REGULARIZER, LAMBDA_G_REGULARIZER,Weight_y,Weight_u,solver,y])
+    print("Finish MADS logging.")
+    
     return y
 
 #### Main code for running ####
@@ -496,20 +511,24 @@ if MADS == True:
     
     MADS_freq = 5
     
-    x0 = [lambda_g_baseline, lambda_u_baseline, lambda_y_baseline, Q_baseline]
-    cons = [R, umin,umax,yref,T,T_ini,T_f,dim_u,dim_y,MADS_freq]
-    # y = DeePC_MADS_Run(x0,[R, umin,umax,yref,T,T_ini,T_f,dim_u,dim_y,MADS_freq])
+    x0 = [lambda_g_baseline, lambda_u_baseline, lambda_y_baseline]
+    cons = [R, umin,umax,yref,T,T_ini,T_f,dim_u,dim_y,MADS_freq,Q]
+    # y = DeePC_MADS_Run(x0,cons)
+    # print("Finish eval testing.")
     
     fun: Callable = DeePC_MADS_Run
     eval = {"blackbox": fun, "constants": cons}
     param = {"baseline": x0,
-                "lb": [0, 0, 10, 1e2],
-                "ub": [10, 100, 1000, 1e6],
-                "var_names": ["lambda_g","lambda_u","lambda_y","Q"],
-                "scaling": [1, 1, 100, 1000],
+                "lb": [0, 0, 0],
+                "ub": [100, 100, 1000],
+                "var_names": ["lambda_g","lambda_u","lambda_y"],
+                "scaling": [100, 100, 1000],
                 "post_dir": "./post"}
     
-    options = {"seed": 0, "budget": 100000, "tol": 1e-3, "display": False, "save_results": True, "save_coordinates": True}
+    options = {"seed": 0, "budget": 100000, "tol": 1e-2, "display": False, "save_results": True, "save_coordinates": True,  "precision": "low"}
+    
+    # precisions: "high" "medium" "low"
+    
     
     data = {"evaluator": eval, "param": param, "options":options}
     
@@ -517,22 +536,6 @@ if MADS == True:
     # out is a dictionary that will hold output data of the final solution. The out dictionary has three keys: "xmin", "fmin" and "hmin"
     
     out = POLL.main(data)
-    
-    # print("Start MADS logging.")
-    # name = "MADS_logger.csv"
-
-    # if (not os.path.exists("MADS_logging")):
-    #     os.mkdir("MADS_logging")
-    # if (not os.path.exists("MADS_logging/" + name)):
-    #     with open("logging/" + name, "w") as csv_obj:
-    #         spam_writer = csv.writer(csv_obj, delimiter=";", lineterminator="\n")
-    #         spam_writer.writerow(["T" ,"Tini" ,"Tf" ,"lambda_u" ,"lambda_y" ,"lambda_g" ,"Q" ,"R" ,"solver" ,"avg_opt_step_time", "total_steps", "mse"])
-    #         spam_writer.writerow([info['T'], info['Tini'], info['Tf'],info['lambda_u'],info['lambda_y'],info['lambda_g'],info['Q'],info['R'],info['solver'],info['avg_opt_step_time'],info['total_steps'],info['mse']])
-    # else:
-    #     with open("logging/" + name, "a") as csv_state:
-    #         spam_writer = csv.writer(csv_state, delimiter=";", lineterminator="\n")
-    #         spam_writer.writerow([info['T'], info['Tini'], info['Tf'],info['lambda_u'],info['lambda_y'],info['lambda_g'],info['Q'],info['R'],info['solver'],info['avg_opt_step_time'],info['total_steps'],info['mse']])
-    # print("Finish parameter logging.")
     
     
 else:
@@ -592,7 +595,6 @@ else:
                 plt.savefig(fname = fig_name)
                 plt.show()
                 
-                y_mse = np.mean(data.y[-20:,:]**2) # should cover at least 1 vortex shedding period
 
     #sys.close()
 print("Finish DeePC.")
