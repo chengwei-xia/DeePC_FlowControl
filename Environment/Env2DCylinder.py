@@ -824,10 +824,18 @@ class Env2DCylinder(gym.Env):
 
         # If observations is based on difference of average top and bottom pressures
         if (self.output_params['single_input'] == True and not self.output_params["probe_type"] == 'drag'):
-            probe_loc_mid = int(len(self.output_params["locations"])/2)
-            press_asym = np.mean(np.array(self.probes_values)[:probe_loc_mid]) - np.mean(np.array(self.probes_values)[-probe_loc_mid:]) 
-            next_state = np.array(press_asym.reshape(1,))
-            print('initialize single_input case')
+            if self.output_params['measure_type'] == 'partial measure':
+                probe_loc_mid = int(len(self.output_params["locations"])/2)
+                press_antisym = np.mean(np.array(self.probes_values)[:probe_loc_mid]) - np.mean(np.array(self.probes_values)[-probe_loc_mid:]) 
+                next_state = np.array(press_antisym.reshape(1,))
+                print('initialize single_input case with partial measurement')
+            elif self.output_params['measure_type'] == 'full measure':
+                # Warning: only works with probe layout of 8x8 in the wake
+                measurements = np.transpose(np.array(self.probes_values).reshape((8,8)))
+                press_antisym = np.mean(measurements[:4,:])-np.mean(measurements[-4:,:])
+                next_state = np.array(press_antisym.reshape(1,))
+                print('initialize single_input case with full measurement')
+            
             # Initialize observation history buffer if history observation history is included in state
             # In the study using Stablebaselines3, the observation history is implemented by FrameStack
             
@@ -954,9 +962,17 @@ class Env2DCylinder(gym.Env):
         
         # If observations is based on difference of average top and bottom pressures
         if (self.output_params['single_input'] == True and not self.output_params["probe_type"] == 'drag'):
-            probe_loc_mid = int(len(self.output_params["locations"])/2)
-            press_asym = np.mean(np.array(self.probes_values)[:probe_loc_mid]) - np.mean(np.array(self.probes_values)[-probe_loc_mid:]) 
-            next_state = np.array(press_asym.reshape(1,))
+            if self.output_params['measure_type'] == 'partial measure':
+                probe_loc_mid = int(len(self.output_params["locations"])/2)
+                press_antisym = np.mean(np.array(self.probes_values)[:probe_loc_mid]) - np.mean(np.array(self.probes_values)[-probe_loc_mid:]) 
+                next_state = np.array(press_antisym.reshape(1,))
+            elif self.output_params['measure_type'] == 'full measure':
+                # Warning: only works with probe layout of 8x8 in the wake
+                measurements = np.transpose(np.array(self.probes_values).reshape((8,8)))
+                press_antisym = np.mean(measurements[:4,:])-np.mean(measurements[-4:,:])
+                next_state = np.array(press_antisym.reshape(1,))
+            else:
+                assert('Unknown measure type')
         
             # Update past observations if previous history is included in state
             for n_hist in range(self.optimization_params["num_steps_in_pressure_history"]-1):

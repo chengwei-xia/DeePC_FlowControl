@@ -73,10 +73,15 @@ def resume_env(plot=False,  # To plot results (Field, controls, lift, drag, rec 
         solver_params = {'dt': dt}
 
         # Define probes positions
-        probe_distribution = {'distribution_type': 'base', # Or 'inflow64' for probes in the wake
+        probe_distribution = {'distribution_type': 'inflow64', # Or 'inflow64' for probes in the wake
                               'probes_at_jets': False,
                               # Whether to use probes at jets or not, usually not in use
                               'n_base': 64}  # Number of probes at cylinder base if 'base' distribution is used
+        
+        if probe_distribution['distribution_type'] == 'base':
+            measure_type = 'partial measure'
+        else:
+            measure_type = 'full measure'
 
         list_position_probes,list_position_probes_ob = probe_positions(probe_distribution, geometry_params)
 
@@ -87,7 +92,8 @@ def resume_env(plot=False,  # To plot results (Field, controls, lift, drag, rec 
                          # whether to feed as input probe values or difference between average top/bottom pressures
                          'single_output': single_output,  # whether policy network outputs one or two outputs
                          'symmetric': False,
-                         'include_actions': include_actions
+                         'include_actions': include_actions,
+                         'measure_type': measure_type
                          }
 
         optimization_params = {"num_steps_in_pressure_history": 1,
@@ -115,7 +121,7 @@ def resume_env(plot=False,  # To plot results (Field, controls, lift, drag, rec 
         reward_function = 'Tavg_power_reward' # Check 'compute_reward()' in Env2DCylinderModified.py for available options
 
         # Ensure that SI is True only if probes on body base, and record pressure
-        output_params['single_input'] = (single_input and probe_distribution['distribution_type'] == 'base' and output_params['probe_type'] == 'pressure')
+        # output_params['single_input'] = (single_input and probe_distribution['distribution_type'] == 'base' and output_params['probe_type'] == 'pressure')
 
         verbose = 0  # For detailed output (see Env2DCylinder)
 
